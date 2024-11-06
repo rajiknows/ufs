@@ -1,10 +1,14 @@
 use sha2::{Digest, Sha256};
 const CHUNK_SIZE: usize = 256 * 1024; // 256 KB chunks
 use std::collections::HashMap;
-type NodeID = [u8; 32];
 
+type ChunkHash = [u8; 32];
+type Chunk = Vec<u8>;
+
+/// CAS is content addresible storage
+///
 pub struct CAS {
-    storage: HashMap<NodeID, Vec<u8>>,
+    storage: HashMap<ChunkHash, Chunk>,
 }
 
 impl CAS {
@@ -34,6 +38,25 @@ impl CAS {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct FileInfo {
     name: String,
+    date: usize,
+    size: usize,
+    author: String,
+}
+
+impl FileInfo {
+    pub fn new(name: String, date: usize, size: usize, author: String) -> FileInfo {
+        Self {
+            name,
+            date,
+            size,
+            author,
+        }
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FileObject {
+    info: FileInfo,
     chunk_hashes: Vec<[u8; 32]>,
 }
 
@@ -50,6 +73,8 @@ impl FileSystem {
         }
     }
 
+    pub fn make_file_object(name: &str, data: &[u8]) {}
+
     pub fn add_file(&mut self, name: &str, data: &[u8]) -> [u8; 32] {
         let chunks: Vec<_> = data.chunks(CHUNK_SIZE).collect();
         let chunk_hashes: Vec<_> = chunks
@@ -57,8 +82,8 @@ impl FileSystem {
             .map(|chunk| self.cas.add(chunk.to_vec()))
             .collect();
 
-        let file_info = FileInfo {
-            name: name.to_string(),
+        let file_info = FileObject {
+            info: FileInfo::new(name.to_string(), 1234, 1234, "raj".to_string()),
             chunk_hashes,
         };
         self.files.push(name.to_string());
