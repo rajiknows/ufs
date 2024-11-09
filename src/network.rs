@@ -18,6 +18,7 @@ enum Message {
     FileList { files: Vec<([u8; 32], String)> },
     Error { message: String },
     NewFile { file_hash: [u8; 32] },
+    AddPeer { peer_addr: SocketAddr },
 }
 #[derive(Debug, Clone)]
 pub struct NetworkNode {
@@ -47,9 +48,12 @@ impl NetworkNode {
 
             let fs = self.fs.clone();
             let chunk_locations = self.chunk_locations.clone();
+            let known_peers = self.known_peers.clone();
 
             tokio::spawn(async move {
-                if let Err(e) = Self::handle_connection(socket, fs, chunk_locations).await {
+                if let Err(e) =
+                    Self::handle_connection(socket, fs, chunk_locations, known_peers).await
+                {
                     eprintln!("Error handling connection: {}", e);
                 }
             });
@@ -60,6 +64,7 @@ impl NetworkNode {
         mut socket: TcpStream,
         fs: Arc<Mutex<FileSystem>>,
         _chunk_locations: Arc<Mutex<HashMap<[u8; 32], Vec<SocketAddr>>>>,
+        known_peers: Arc<Mutex<Vec<SocketAddr>>>,
     ) -> Result<(), Box<dyn Error>> {
         let mut buffer = vec![0; 1024 * 1024]; // 1MB buffer
         let n = socket.read(&mut buffer)?;
@@ -91,6 +96,17 @@ impl NetworkNode {
                 let serialized = bincode::serialize(&response)?;
                 socket.write_all(&serialized)?;
             }
+            Message::AddPeer { peer_addr } => {
+                let message = String::from("add peer request recieved");
+                let serialized = bincode::serialize(&message)?;
+                socket.write_all(&serialized)?;
+                let mut peers = known_peers.lock().await;
+                if !peers.contains(&peer_addr) {
+                    peers.push(peer_addr);
+                    // Broadcast the new peer to other nodes
+                    NetworkNode::broadcast_add_peer(&*peers, peer_addr).await?;
+                }
+            }
             _ => {
                 let response = Message::Error {
                     message: "Unsupported operation".to_string(),
@@ -102,17 +118,53 @@ impl NetworkNode {
         Ok(())
     }
 
-    pub async fn add_peer(&mut self, addr: SocketAddr) {
+    pub async fn add_peer(&self, addr: SocketAddr) {
         let mut peers = self.known_peers.lock().await;
-        if !peers.contains(&addr) {
+
+        if addr != self.addr && !peers.contains(&addr) {
             peers.push(addr);
+            // broadcast to all the nodes that a new peer has been added
+            for &peer in peers.iter() {
+                if peer != addr && peer != self.addr {
+                    if let Err(e) = Self::send_add_peer(peer, addr).await {
+                        eprintln!("Failed to notify peer {}: {}", peer, e);
+                    }
+                }
+            }
         }
     }
 
+    async fn broadcast_add_peer(
+        known_peers: &Vec<SocketAddr>,
+        new_peer: SocketAddr,
+    ) -> Result<(), Box<dyn Error>> {
+        for &peer_addr in known_peers {
+            if peer_addr != new_peer {
+                if let Err(e) = Self::send_add_peer(peer_addr, new_peer).await {
+                    eprintln!("Failed to notify peer {}: {}", peer_addr, e);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn send_add_peer(
+        peer_addr: SocketAddr,
+        new_peer: SocketAddr,
+    ) -> Result<(), Box<dyn Error>> {
+        let mut stream = TcpStream::connect(peer_addr)?;
+        let message = Message::AddPeer {
+            peer_addr: new_peer,
+        };
+        let serialized = bincode::serialize(&message)?;
+        stream.write_all(&serialized)?;
+        Ok(())
+    }
+
     pub async fn get_file(&self, file_hash: [u8; 32]) -> Result<(String, Vec<u8>), Box<dyn Error>> {
-        println!("inside get_file function");
+        // println!("inside get_file function");
         let fs = self.fs.lock().await;
-        println!("fs_locked");
+        // println!("fs_locked");
         if let Some(metadata) = fs.get_file_metadata(&file_hash) {
             let file_name = metadata.name.clone();
             let chunk_hashes = metadata.chunk_hashes.clone();
@@ -224,6 +276,10 @@ impl NetworkNode {
 
     pub async fn get_filesystem(&self) -> Arc<Mutex<FileSystem>> {
         return self.fs.clone();
+    }
+
+    pub async fn get_peers(&self) -> Arc<Mutex<Vec<SocketAddr>>> {
+        return self.known_peers.clone();
     }
 
     pub async fn broadcast_new_file(&self, file_hash: [u8; 32]) -> Result<(), Box<dyn Error>> {

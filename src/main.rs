@@ -15,7 +15,8 @@ async fn display_menu() {
     println!("1. {} Upload a file", "📤".bright_yellow());
     println!("2. {} Download a file", "📥".bright_blue());
     println!("3. {} List all files", "📋".bright_cyan());
-    println!("4. {} Exit", "🚪".bright_red());
+    println!("4. list all the peers");
+    println!("5. {} Exit", "🚪".bright_red());
     print!("\nEnter your choice (1-4): ");
     io::stdout().flush().unwrap();
 }
@@ -110,6 +111,18 @@ async fn handle_list(node: &NetworkNode) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+async fn list_peers(node: &NetworkNode) {
+    println!("\n{}", "===listing peers===".bright_purple());
+    let peers = node.get_peers().await;
+    let peers = peers.lock().await;
+
+    if !peers.is_empty() {
+        for peer in &*peers {
+            println!("\n{:?}", peer);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // Get port from user
@@ -161,7 +174,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     println!("{} {}", "Error:".bright_red(), e);
                 }
             }
-            "4" => {
+            "4" => list_peers(&node).await,
+
+            "5" => {
                 println!("{}", "Goodbye!".bright_green());
                 break;
             }

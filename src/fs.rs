@@ -112,10 +112,10 @@ impl FileSystem {
         cas.get(chunk_hash).map(|v| v.clone())
     }
 
-    pub async fn add_chunk(&mut self, _chunk_hash: [u8; 32], data: Vec<u8>) {
-        let mut cas = self.cas.lock().await;
-        cas.add(data);
-    }
+    //pub async fn add_chunk(&mut self, _chunk_hash: [u8; 32], data: Vec<u8>) {
+    //    let mut cas = self.cas.lock().await;
+    //    cas.add(data);
+    //}
 
     pub fn list_files(&self) -> Vec<([u8; 32], String)> {
         self.files
