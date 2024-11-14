@@ -40,6 +40,7 @@ impl CAS {
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct FileInfo {
+    pub filehash: [u8; 32],
     pub name: String,
     pub date: usize,
     pub size: usize,
@@ -50,6 +51,7 @@ pub struct FileInfo {
 
 impl FileInfo {
     pub fn new(
+        filehash: [u8; 32],
         name: String,
         date: usize,
         size: usize,
@@ -58,6 +60,7 @@ impl FileInfo {
         chunk_hashes: Vec<[u8; 32]>,
     ) -> FileInfo {
         Self {
+            filehash,
             name,
             date,
             size,
@@ -88,6 +91,7 @@ impl FileSystem {
         let chunk_hashes: Vec<_> = chunks.iter().map(|chunk| cas.add(chunk.to_vec())).collect();
 
         let file_info = FileInfo::new(
+            hash_file(data),
             name.to_string(),
             1234, // TODO: Use actual timestamp
             data.len(),
@@ -107,6 +111,10 @@ impl FileSystem {
         self.files.get(file_hash)
     }
 
+    pub fn add_file_metadata(&mut self, file_hash: [u8; 32], file_info: FileInfo) {
+        self.files.insert(file_hash, file_info);
+    }
+
     pub async fn get_chunk(&self, chunk_hash: &[u8; 32]) -> Option<Vec<u8>> {
         let cas = self.cas.lock().await;
         cas.get(chunk_hash).map(|v| v.clone())
@@ -123,4 +131,9 @@ impl FileSystem {
             .map(|(hash, info)| (*hash, info.name.clone()))
             .collect()
     }
+}
+pub fn hash_file(data: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher.finalize().into()
 }

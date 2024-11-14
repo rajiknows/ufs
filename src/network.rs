@@ -19,7 +19,10 @@ enum Message {
     Error { message: String },
     NewFile { file_hash: [u8; 32] },
     AddPeer { peer_addr: SocketAddr },
+    SyncRequest,
+    SyncResponse { files: Vec<FileInfo> },
 }
+
 #[derive(Debug, Clone)]
 pub struct NetworkNode {
     fs: Arc<Mutex<FileSystem>>,
@@ -79,12 +82,24 @@ impl NetworkNode {
                     };
                     let serialized = bincode::serialize(&response)?;
                     socket.write_all(&serialized)?;
+                } else {
+                    let response = Message::Error {
+                        message: "File not found".to_string(),
+                    };
+                    let serialized = bincode::serialize(&response)?;
+                    socket.write_all(&serialized)?;
                 }
             }
             Message::GetChunk { chunk_hash } => {
                 let fs = fs.lock().await;
                 if let Some(chunk_data) = fs.get_chunk(&chunk_hash).await {
                     let response = Message::ChunkData { chunk: chunk_data };
+                    let serialized = bincode::serialize(&response)?;
+                    socket.write_all(&serialized)?;
+                } else {
+                    let response = Message::Error {
+                        message: "Chunk not found".to_string(),
+                    };
                     let serialized = bincode::serialize(&response)?;
                     socket.write_all(&serialized)?;
                 }
@@ -96,16 +111,53 @@ impl NetworkNode {
                 let serialized = bincode::serialize(&response)?;
                 socket.write_all(&serialized)?;
             }
+            Message::NewFile { file_hash } => {
+                // When a new file is announced, request its metadata and chunks
+                let peer_addr = socket.peer_addr()?;
+                let mut stream = TcpStream::connect(peer_addr)?;
+                let request = Message::GetFile { file_hash };
+                let serialized = bincode::serialize(&request)?;
+                stream.write_all(&serialized)?;
+
+                let mut buffer = vec![0; 1024 * 1024];
+                let n = stream.read(&mut buffer)?;
+
+                match bincode::deserialize(&buffer[..n])? {
+                    Message::FileMetadata { metadata } => {
+                        let mut fs = fs.lock().await;
+                        fs.add_file_metadata(file_hash, metadata);
+                    }
+                    _ => {}
+                }
+            }
             Message::AddPeer { peer_addr } => {
-                let message = String::from("add peer request recieved");
-                let serialized = bincode::serialize(&message)?;
-                socket.write_all(&serialized)?;
                 let mut peers = known_peers.lock().await;
                 if !peers.contains(&peer_addr) {
                     peers.push(peer_addr);
-                    // Broadcast the new peer to other nodes
-                    NetworkNode::broadcast_add_peer(&*peers, peer_addr).await?;
+                    // Sync files with the new peer
+                    drop(peers); // Release the lock before making network calls
+                    if let Err(e) = Self::sync_with_peer(peer_addr, fs.clone()).await {
+                        eprintln!("Failed to sync with peer {}: {}", peer_addr, e);
+                    }
                 }
+
+                let response = Message::Error {
+                    message: "Peer added successfully".to_string(),
+                };
+                let serialized = bincode::serialize(&response)?;
+                socket.write_all(&serialized)?;
+            }
+            Message::SyncRequest => {
+                let fs = fs.lock().await;
+                let mut files = Vec::new();
+                for (hash, _) in fs.list_files() {
+                    if let Some(metadata) = fs.get_file_metadata(&hash) {
+                        files.push(metadata.clone());
+                    }
+                }
+                let response = Message::SyncResponse { files };
+                let serialized = bincode::serialize(&response)?;
+                socket.write_all(&serialized)?;
             }
             _ => {
                 let response = Message::Error {
@@ -118,53 +170,58 @@ impl NetworkNode {
         Ok(())
     }
 
-    pub async fn add_peer(&self, addr: SocketAddr) {
-        let mut peers = self.known_peers.lock().await;
-
-        if addr != self.addr && !peers.contains(&addr) {
-            peers.push(addr);
-            // broadcast to all the nodes that a new peer has been added
-            for &peer in peers.iter() {
-                if peer != addr && peer != self.addr {
-                    if let Err(e) = Self::send_add_peer(peer, addr).await {
-                        eprintln!("Failed to notify peer {}: {}", peer, e);
-                    }
-                }
-            }
-        }
-    }
-
-    async fn broadcast_add_peer(
-        known_peers: &Vec<SocketAddr>,
-        new_peer: SocketAddr,
-    ) -> Result<(), Box<dyn Error>> {
-        for &peer_addr in known_peers {
-            if peer_addr != new_peer {
-                if let Err(e) = Self::send_add_peer(peer_addr, new_peer).await {
-                    eprintln!("Failed to notify peer {}: {}", peer_addr, e);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    async fn send_add_peer(
+    async fn sync_with_peer(
         peer_addr: SocketAddr,
-        new_peer: SocketAddr,
+        fs: Arc<Mutex<FileSystem>>,
     ) -> Result<(), Box<dyn Error>> {
         let mut stream = TcpStream::connect(peer_addr)?;
-        let message = Message::AddPeer {
-            peer_addr: new_peer,
-        };
-        let serialized = bincode::serialize(&message)?;
+        let request = Message::SyncRequest;
+        let serialized = bincode::serialize(&request)?;
         stream.write_all(&serialized)?;
-        Ok(())
+
+        let mut buffer = vec![0; 1024 * 1024];
+        let n = stream.read(&mut buffer)?;
+
+        match bincode::deserialize(&buffer[..n])? {
+            Message::SyncResponse { files } => {
+                let mut fs = fs.lock().await;
+                for file_info in files {
+                    fs.add_file_metadata(file_info.filehash, file_info);
+                }
+                Ok(())
+            }
+            _ => Err("Unexpected response during sync".into()),
+        }
+    }
+
+    pub async fn add_peer(&self, addr: SocketAddr) {
+        let mut peers = self.known_peers.lock().await;
+        if addr != self.addr && !peers.contains(&addr) {
+            peers.push(addr);
+            drop(peers);
+
+            // Send AddPeer message to the new peer
+            if let Err(e) = self.send_add_peer(addr, self.addr).await {
+                eprintln!("Failed to notify peer {}: {}", addr, e);
+            }
+
+            // Sync files with the new peer
+            if let Err(e) = Self::sync_with_peer(addr, self.fs.clone()).await {
+                eprintln!("Failed to sync with peer {}: {}", addr, e);
+            }
+        }
+    }
+
+    pub async fn get_filesystem(&self) -> Arc<Mutex<FileSystem>> {
+        return self.fs.clone();
+    }
+
+    pub async fn get_peers(&self) -> Arc<Mutex<Vec<SocketAddr>>> {
+        return self.known_peers.clone();
     }
 
     pub async fn get_file(&self, file_hash: [u8; 32]) -> Result<(String, Vec<u8>), Box<dyn Error>> {
-        // println!("inside get_file function");
         let fs = self.fs.lock().await;
-        // println!("fs_locked");
         if let Some(metadata) = fs.get_file_metadata(&file_hash) {
             let file_name = metadata.name.clone();
             let chunk_hashes = metadata.chunk_hashes.clone();
@@ -246,9 +303,7 @@ impl NetworkNode {
         &self,
         file_hash: [u8; 32],
     ) -> Result<(String, Vec<u8>), Box<dyn Error>> {
-        println!("inside request ffrom peers");
         let peers = self.known_peers.lock().await;
-        println!("{:?}", peers);
         for &peer_addr in peers.iter() {
             let mut stream = TcpStream::connect(peer_addr)?;
             let request = Message::GetFile { file_hash };
@@ -260,7 +315,6 @@ impl NetworkNode {
 
             match bincode::deserialize(&buffer[..n])? {
                 Message::FileMetadata { metadata } => {
-                    // Got metadata, now fetch chunks
                     let mut file_data = Vec::with_capacity(metadata.total_size);
                     for chunk_hash in &metadata.chunk_hashes {
                         let chunk = self.get_chunk_from_network(chunk_hash).await?;
@@ -272,14 +326,6 @@ impl NetworkNode {
             }
         }
         Err("File not found in network".into())
-    }
-
-    pub async fn get_filesystem(&self) -> Arc<Mutex<FileSystem>> {
-        return self.fs.clone();
-    }
-
-    pub async fn get_peers(&self) -> Arc<Mutex<Vec<SocketAddr>>> {
-        return self.known_peers.clone();
     }
 
     pub async fn broadcast_new_file(&self, file_hash: [u8; 32]) -> Result<(), Box<dyn Error>> {
@@ -301,6 +347,22 @@ impl NetworkNode {
         let message = Message::NewFile { file_hash };
         let serialized = bincode::serialize(&message)?;
         stream.write_all(&serialized)?;
+        Ok(())
+    }
+
+    async fn send_add_peer(
+        &self,
+        peer_addr: SocketAddr,
+        new_peer: SocketAddr,
+    ) -> Result<(), Box<dyn Error>> {
+        let mut stream = TcpStream::connect(peer_addr)?;
+        let message = Message::AddPeer {
+            peer_addr: new_peer,
+        };
+        let serialized = bincode::serialize(&message)?;
+        stream.write_all(&serialized)?;
+        let mut buffer = vec![0; 1024];
+        stream.read(&mut buffer)?; // Wait for acknowledgment
         Ok(())
     }
 }
