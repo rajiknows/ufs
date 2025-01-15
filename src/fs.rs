@@ -8,7 +8,6 @@ type ChunkHash = [u8; 32];
 type Chunk = Vec<u8>;
 
 /// CAS is content addresible storage
-///
 #[derive(Debug, Clone)]
 pub struct CAS {
     storage: HashMap<ChunkHash, Chunk>,
@@ -20,17 +19,14 @@ impl CAS {
             storage: HashMap::new(),
         }
     }
-
     pub fn add(&mut self, data: Vec<u8>) -> [u8; 32] {
         let hash = self.hash(&data);
         self.storage.insert(hash, data);
         hash
     }
-
     pub fn get(&self, hash: &[u8; 32]) -> Option<&Vec<u8>> {
         self.storage.get(hash)
     }
-
     fn hash(&self, data: &[u8]) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(data);
@@ -70,6 +66,7 @@ impl FileInfo {
         }
     }
 }
+
 #[derive(Debug, Clone)]
 pub struct FileSystem {
     files: HashMap<[u8; 32], FileInfo>, // Changed from Vec<String> to track files by hash
@@ -102,7 +99,6 @@ impl FileSystem {
 
         let file_info_bytes = bincode::serialize(&file_info).unwrap();
         let file_hash = cas.add(file_info_bytes);
-
         self.files.insert(file_hash, file_info);
         file_hash
     }
@@ -130,6 +126,11 @@ impl FileSystem {
             .iter()
             .map(|(hash, info)| (*hash, info.name.clone()))
             .collect()
+    }
+
+    pub async fn add_file_from_path(&mut self, path: &str) -> [u8; 32] {
+        let data = tokio::fs::read(path).await.expect("Failed to read file");
+        self.add_file(path, &data).await
     }
 }
 pub fn hash_file(data: &[u8]) -> [u8; 32] {

@@ -4,7 +4,9 @@ use std::error::Error;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio::time::sleep;
 
 use crate::fs::{FileInfo, FileSystem};
 
@@ -21,14 +23,17 @@ enum Message {
     AddPeer { peer_addr: SocketAddr },
     SyncRequest,
     SyncResponse { files: Vec<FileInfo> },
+    Ping,
+    Pong,
 }
 
 #[derive(Debug, Clone)]
 pub struct NetworkNode {
+    addr: SocketAddr,
     fs: Arc<Mutex<FileSystem>>,
     known_peers: Arc<Mutex<Vec<SocketAddr>>>,
-    chunk_locations: Arc<Mutex<HashMap<[u8; 32], Vec<SocketAddr>>>>,
-    addr: SocketAddr,
+    dht: Arc<Mutex<HashMap<[u8; 32], Vec<SocketAddr>>>>,
+    uptime: Arc<Mutex<u32>>,
 }
 
 impl NetworkNode {
@@ -36,37 +41,58 @@ impl NetworkNode {
         NetworkNode {
             fs: Arc::new(Mutex::new(FileSystem::new())),
             known_peers: Arc::new(Mutex::new(Vec::new())),
-            chunk_locations: Arc::new(Mutex::new(HashMap::new())),
+            dht: Arc::new(Mutex::new(HashMap::new())),
             addr,
+            uptime: Arc::new(Mutex::new(0)),
         }
     }
 
-    pub async fn start(&self) -> Result<(), Box<dyn Error>> {
+    pub async fn start(&mut self) -> Result<(), Box<dyn Error>> {
         let listener = TcpListener::bind(self.addr)?;
         println!("Listening on {}", self.addr);
+
+        let uptime = self.uptime.clone();
+
+        tokio::spawn(async move {
+            loop {
+                {
+                    let mut uptime = uptime.lock().await;
+                    *uptime += 1;
+                }
+                sleep(Duration::from_secs(1)).await;
+            }
+        });
 
         loop {
             let (socket, peer_addr) = listener.accept()?;
             println!("New connection from {}", peer_addr);
 
             let fs = self.fs.clone();
-            let chunk_locations = self.chunk_locations.clone();
+            let dht = self.dht.clone();
             let known_peers = self.known_peers.clone();
 
             tokio::spawn(async move {
-                if let Err(e) =
-                    Self::handle_connection(socket, fs, chunk_locations, known_peers).await
-                {
+                if let Err(e) = Self::handle_connection(socket, fs, dht, known_peers).await {
                     eprintln!("Error handling connection: {}", e);
                 }
             });
         }
     }
+    pub async fn get_uptime(&self) -> Result<u32, ()> {
+        let uptime = self.uptime.lock().await;
+        Ok(uptime.clone())
+    }
+
+    pub async fn list_files(&self) -> Vec<([u8; 32], String)> {
+        let fs = self.fs.lock().await;
+        let files = fs.list_files();
+        files
+    }
 
     async fn handle_connection(
         mut socket: TcpStream,
         fs: Arc<Mutex<FileSystem>>,
-        _chunk_locations: Arc<Mutex<HashMap<[u8; 32], Vec<SocketAddr>>>>,
+        _dht: Arc<Mutex<HashMap<[u8; 32], Vec<SocketAddr>>>>,
         known_peers: Arc<Mutex<Vec<SocketAddr>>>,
     ) -> Result<(), Box<dyn Error>> {
         let mut buffer = vec![0; 1024 * 1024]; // 1MB buffer
@@ -90,6 +116,7 @@ impl NetworkNode {
                     socket.write_all(&serialized)?;
                 }
             }
+
             Message::GetChunk { chunk_hash } => {
                 let fs = fs.lock().await;
                 if let Some(chunk_data) = fs.get_chunk(&chunk_hash).await {
@@ -104,6 +131,7 @@ impl NetworkNode {
                     socket.write_all(&serialized)?;
                 }
             }
+
             Message::ListFiles => {
                 let fs = fs.lock().await;
                 let files = fs.list_files();
@@ -111,6 +139,7 @@ impl NetworkNode {
                 let serialized = bincode::serialize(&response)?;
                 socket.write_all(&serialized)?;
             }
+
             Message::NewFile { file_hash } => {
                 // When a new file is announced, request its metadata and chunks
                 let peer_addr = socket.peer_addr()?;
@@ -130,6 +159,7 @@ impl NetworkNode {
                     _ => {}
                 }
             }
+
             Message::AddPeer { peer_addr } => {
                 let mut peers = known_peers.lock().await;
                 if !peers.contains(&peer_addr) {
@@ -147,6 +177,7 @@ impl NetworkNode {
                 let serialized = bincode::serialize(&response)?;
                 socket.write_all(&serialized)?;
             }
+
             Message::SyncRequest => {
                 let fs = fs.lock().await;
                 let mut files = Vec::new();
@@ -156,6 +187,11 @@ impl NetworkNode {
                     }
                 }
                 let response = Message::SyncResponse { files };
+                let serialized = bincode::serialize(&response)?;
+                socket.write_all(&serialized)?;
+            }
+            Message::Ping => {
+                let response = Message::Pong;
                 let serialized = bincode::serialize(&response)?;
                 socket.write_all(&serialized)?;
             }
@@ -216,8 +252,9 @@ impl NetworkNode {
         return self.fs.clone();
     }
 
-    pub async fn get_peers(&self) -> Arc<Mutex<Vec<SocketAddr>>> {
-        return self.known_peers.clone();
+    pub async fn get_peers(&self) -> Vec<SocketAddr> {
+        let peers = self.known_peers.lock().await;
+        peers.clone()
     }
 
     pub async fn get_file(&self, file_hash: [u8; 32]) -> Result<(String, Vec<u8>), Box<dyn Error>> {
@@ -251,7 +288,7 @@ impl NetworkNode {
         drop(fs);
 
         // Then try known locations
-        let locations = self.chunk_locations.lock().await;
+        let locations = self.dht.lock().await;
         if let Some(peers) = locations.get(chunk_hash) {
             for &peer_addr in peers {
                 if let Ok(chunk) = self.request_chunk_from_peer(chunk_hash, peer_addr).await {
@@ -364,5 +401,29 @@ impl NetworkNode {
         let mut buffer = vec![0; 1024];
         stream.read(&mut buffer)?; // Wait for acknowledgment
         Ok(())
+    }
+
+    pub async fn ping_self_nodes(&self) {
+        let peers = self.known_peers.lock().await;
+        for &peer_addr in peers.iter() {
+            if let Err(e) = ping_peer(peer_addr).await {
+                eprintln!("Failed to ping peer {}: {}", peer_addr, e);
+            }
+        }
+    }
+}
+
+pub async fn ping_peer(peer_addr: SocketAddr) -> Result<(), Box<dyn Error>> {
+    let mut stream = TcpStream::connect(peer_addr)?;
+    let message = Message::Ping;
+    let serialized = bincode::serialize(&message)?;
+    stream.write_all(&serialized)?;
+    let mut buffer = vec![0; 1024];
+    stream.read(&mut buffer)?;
+    if let Message::Pong = bincode::deserialize(&buffer)? {
+        println!("peer active : {peer_addr}");
+        Ok(())
+    } else {
+        Err("Unexpected response".into())
     }
 }
