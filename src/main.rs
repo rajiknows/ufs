@@ -1,156 +1,127 @@
-pub mod fs;
-pub mod network;
-pub mod routing;
-use std::io::{self, Write};
+use axum::{
+    extract::{Json, Path, State},
+    routing::get,
+    Router,
+};
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::{net::TcpListener, sync::Mutex};
 
-use clap::Parser;
-use network::Network;
+mod fs;
+mod network;
 
-#[derive(Parser)]
-#[clap(
-    name = "IPFS-like CLI",
-    version = "1.0",
-    author = "Your Name",
-    about = "A simple IPFS-like peer-to-peer network"
-)]
-struct Cli {
-    #[clap(
-        short,
-        long,
-        value_name = "HOST",
-        help = "Sets the host address for this client"
-    )]
-    host: String,
-
-    #[clap(
-        short,
-        long,
-        value_name = "PORT",
-        help = "Sets the port for this client"
-    )]
-    port: u16,
-
-    #[clap(
-        short,
-        long,
-        value_name = "CONNECT",
-        help = "Specifies a node to connect to (host:port)"
-    )]
-    connect: Option<String>,
-}
+use network::NetworkNode;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cli = Cli::parse();
+async fn main() {
+    let addr: SocketAddr = "127.0.0.1:8000".parse().unwrap();
 
-    let client_addr: SocketAddr = format!("{}:{}", cli.host, cli.port).parse()?;
+    let node = Arc::new(Mutex::new(NetworkNode::new(addr)));
 
-    let mut bootstrap_nodes = vec![];
-    if let Some(connect_addr) = cli.connect {
-        bootstrap_nodes.push(connect_addr.parse()?);
-    }
-
-    let network = Network::new(client_addr, bootstrap_nodes).await?;
-
-    println!("Starting network client...");
-    // Start the network in the background
-    let network_clone = network.clone();
+    // Start the DFS client in a separate task
+    let node_clone = Arc::clone(&node);
     tokio::spawn(async move {
-        if let Err(e) = network_clone.run().await {
-            eprintln!("Network error: {}", e);
+        let mut locked_node = node_clone.lock().await;
+        if let Err(e) = locked_node.start().await {
+            eprintln!("Error starting DFS client: {}", e);
         }
     });
 
-    println!("Interactive IPFS-like CLI");
-    println!(
-        "Available commands: upload <file_path>, get <file_hash>, list, discover, nodes, quit"
-    );
+    // Build the Axum app
+    let app = Router::new()
+        .route("/files", get(list_files).post(upload_file))
+        .route("/files/:hash", get(download_file).delete(delete_file))
+        .route("/peers", get(list_peers).post(add_peer))
+        .route("/uptime", get(get_uptime))
+        .with_state(node.clone());
 
-    loop {
-        print!("> ");
-        io::stdout().flush()?;
+    let listener = TcpListener::bind(addr)
+        .await
+        .expect("Failed to bind to port");
 
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-
-        let parts: Vec<&str> = input.trim().split_whitespace().collect();
-        if parts.is_empty() {
-            continue;
-        }
-
-        match parts[0] {
-            "upload" => {
-                if parts.len() != 2 {
-                    println!("Usage: upload <file_path>");
-                } else {
-                    let file_path = parts[1];
-                    let data = std::fs::read(file_path)?;
-                    let hash = network.upload_file(file_path, &data).await?;
-                    println!("File uploaded with hash: {}", hex_encode(&hash));
-                }
-            }
-            "get" => {
-                if parts.len() != 2 {
-                    println!("Usage: get <file_hash>");
-                } else {
-                    let hash_str = parts[1];
-                    match hex_decode(hash_str) {
-                        Ok(hash) => match network.get_file(&hash).await? {
-                            Some((name, data)) => {
-                                println!("Retrieved file: {} ({} bytes)", name, data.len());
-                                std::fs::write(&name, data)?;
-                                println!("File saved as: {}", name);
-                            }
-                            None => println!("File not found"),
-                        },
-                        Err(_) => {
-                            println!("Invalid hash format. Expected 64 hexadecimal characters.")
-                        }
-                    }
-                }
-            }
-            "list" => {
-                let files = network.list_files().await?;
-                println!("Files in the network:");
-                for file in files {
-                    println!("- {}", file);
-                }
-            }
-            "discover" => {
-                network.discover_nodes().await?;
-                println!("Node discovery completed");
-            }
-            "nodes" => {
-                let nodes = network.list_nodes().await?;
-                println!("Known nodes:");
-                for node in nodes {
-                    println!("- {}", node.addr);
-                }
-            }
-            "quit" => {
-                println!("Exiting...");
-                break;
-            }
-            _ => {
-                println!("Unknown command. Available commands: upload <file_path>, get <file_hash>, list, discover, nodes, quit");
-            }
-        }
-    }
-    Ok(())
+    axum::serve(listener, app).await.unwrap();
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+async fn list_files(State(node): State<Arc<Mutex<NetworkNode>>>) -> Json<Vec<(String, String)>> {
+    let locked_node = node.lock().await;
+    let files = locked_node.list_files().await;
+    Json(
+        files
+            .into_iter()
+            .map(|(hash, name)| (hex::encode(hash), name))
+            .collect(),
+    )
 }
 
-fn hex_decode(s: &str) -> Result<[u8; 32], Box<dyn std::error::Error>> {
-    if s.len() != 64 {
-        return Err("Invalid hash length".into());
+#[derive(Deserialize)]
+struct FileUpload {
+    path: String,
+}
+
+async fn upload_file(
+    State(node): State<Arc<Mutex<NetworkNode>>>,
+    Json(payload): Json<FileUpload>,
+) -> Json<String> {
+    let locked_node = node.lock().await;
+    let file_hash = locked_node
+        .get_filesystem()
+        .await
+        .lock()
+        .await
+        .add_file_from_path(&payload.path)
+        .await;
+    Json(hex::encode(file_hash))
+}
+
+async fn download_file(
+    Path(hash): Path<String>,
+    State(node): State<Arc<Mutex<NetworkNode>>>,
+) -> Json<Option<Vec<u8>>> {
+    let locked_node = node.lock().await;
+    let hash_bytes = hex::decode(hash).unwrap();
+    match locked_node.get_file(hash_bytes.try_into().unwrap()).await {
+        Ok((_, data)) => Json(Some(data)),
+        Err(_) => Json(None),
     }
-    let mut bytes = [0u8; 32];
-    for (i, chunk) in s.as_bytes().chunks(2).enumerate() {
-        bytes[i] = u8::from_str_radix(std::str::from_utf8(chunk)?, 16)?;
+}
+
+async fn delete_file(Path(_hash): Path<String>) -> &'static str {
+    // Not implemented in the backend
+    "Delete endpoint not implemented"
+}
+
+async fn list_peers(State(node): State<Arc<Mutex<NetworkNode>>>) -> Json<Vec<String>> {
+    let locked_node = node.lock().await;
+    Json(
+        locked_node
+            .get_peers()
+            .await
+            .into_iter()
+            .map(|addr| addr.to_string())
+            .collect(),
+    )
+}
+
+#[derive(Deserialize)]
+struct PeerAdd {
+    addr: String,
+}
+
+async fn add_peer(
+    State(node): State<Arc<Mutex<NetworkNode>>>,
+    Json(payload): Json<PeerAdd>,
+) -> &'static str {
+    let locked_node = node.lock().await;
+    if let Ok(peer_addr) = payload.addr.parse() {
+        locked_node.add_peer(peer_addr).await;
+        "Peer added successfully"
+    } else {
+        "Invalid address"
     }
-    Ok(bytes)
+}
+
+async fn get_uptime(State(node): State<Arc<Mutex<NetworkNode>>>) -> Json<u32> {
+    let locked_node = node.lock().await;
+    Json(locked_node.get_uptime().await.unwrap())
 }
