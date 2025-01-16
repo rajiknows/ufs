@@ -32,6 +32,11 @@ impl CAS {
         hasher.update(data);
         hasher.finalize().into()
     }
+
+    pub fn remove(&mut self, chunk_hash: [u8; 32]) -> () {
+        self.storage.remove(&chunk_hash);
+        ()
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -101,6 +106,14 @@ impl FileSystem {
         let file_hash = cas.add(file_info_bytes);
         self.files.insert(file_hash, file_info);
         file_hash
+    }
+
+    pub async fn delete_file(&mut self, file_hash: [u8; 32]) -> () {
+        let mut cas = self.cas.lock().await;
+        cas.remove(file_hash);
+        drop(cas);
+        self.files.remove(&file_hash);
+        ()
     }
 
     pub fn get_file_metadata(&self, file_hash: &[u8; 32]) -> Option<&FileInfo> {

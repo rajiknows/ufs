@@ -20,6 +20,7 @@ enum Message {
     FileList { files: Vec<([u8; 32], String)> },
     Error { message: String },
     NewFile { file_hash: [u8; 32] },
+    DeleteFile { file_hash: [u8; 32] },
     AddPeer { peer_addr: SocketAddr },
     SyncRequest,
     SyncResponse { files: Vec<FileInfo> },
@@ -27,32 +28,50 @@ enum Message {
     Pong,
 }
 
-#[derive(Debug, Clone)]
-pub struct NetworkNode {
+#[derive(Debug)]
+struct NetworkNodeInner {
     addr: SocketAddr,
     fs: Arc<Mutex<FileSystem>>,
     known_peers: Arc<Mutex<Vec<SocketAddr>>>,
     dht: Arc<Mutex<HashMap<[u8; 32], Vec<SocketAddr>>>>,
     uptime: Arc<Mutex<u32>>,
+    is_started: Arc<Mutex<bool>>, // New field
+}
+
+#[derive(Debug, Clone)]
+pub struct NetworkNode {
+    inner: Arc<NetworkNodeInner>,
 }
 
 impl NetworkNode {
     pub fn new(addr: SocketAddr) -> Self {
         NetworkNode {
-            fs: Arc::new(Mutex::new(FileSystem::new())),
-            known_peers: Arc::new(Mutex::new(Vec::new())),
-            dht: Arc::new(Mutex::new(HashMap::new())),
-            addr,
-            uptime: Arc::new(Mutex::new(0)),
+            inner: Arc::new(NetworkNodeInner {
+                addr,
+                fs: Arc::new(Mutex::new(FileSystem::new())),
+                known_peers: Arc::new(Mutex::new(Vec::new())),
+                dht: Arc::new(Mutex::new(HashMap::new())),
+                uptime: Arc::new(Mutex::new(0)),
+                is_started: Arc::new(Mutex::new(false)),
+            }),
         }
     }
 
-    pub async fn start(&mut self) -> Result<(), Box<dyn Error>> {
-        let listener = TcpListener::bind(self.addr)?;
-        println!("Listening on {}", self.addr);
+    pub async fn start(&self) -> Result<(), Box<dyn Error>> {
+        // Check if already started
+        let mut is_started = self.inner.is_started.lock().await;
+        if *is_started {
+            return Ok(());
+        }
+        *is_started = true;
+        drop(is_started); // Release the lock
 
-        let uptime = self.uptime.clone();
+        let listener = TcpListener::bind(self.inner.addr)?;
+        println!("Listening on {}", self.inner.addr);
 
+        let uptime = self.inner.uptime.clone();
+
+        // Start uptime counter
         tokio::spawn(async move {
             loop {
                 {
@@ -63,13 +82,14 @@ impl NetworkNode {
             }
         });
 
+        // Handle incoming connections
         loop {
             let (socket, peer_addr) = listener.accept()?;
             println!("New connection from {}", peer_addr);
 
-            let fs = self.fs.clone();
-            let dht = self.dht.clone();
-            let known_peers = self.known_peers.clone();
+            let fs = self.inner.fs.clone();
+            let dht = self.inner.dht.clone();
+            let known_peers = self.inner.known_peers.clone();
 
             tokio::spawn(async move {
                 if let Err(e) = Self::handle_connection(socket, fs, dht, known_peers).await {
@@ -79,12 +99,12 @@ impl NetworkNode {
         }
     }
     pub async fn get_uptime(&self) -> Result<u32, ()> {
-        let uptime = self.uptime.lock().await;
+        let uptime = self.inner.uptime.lock().await;
         Ok(uptime.clone())
     }
 
     pub async fn list_files(&self) -> Vec<([u8; 32], String)> {
-        let fs = self.fs.lock().await;
+        let fs = self.inner.fs.lock().await;
         let files = fs.list_files();
         files
     }
@@ -160,6 +180,11 @@ impl NetworkNode {
                 }
             }
 
+            Message::DeleteFile { file_hash } => {
+                let mut fs = fs.lock().await;
+                fs.delete_file(file_hash).await;
+            }
+
             Message::AddPeer { peer_addr } => {
                 let mut peers = known_peers.lock().await;
                 if !peers.contains(&peer_addr) {
@@ -206,6 +231,14 @@ impl NetworkNode {
         Ok(())
     }
 
+    // async fn delete_file(
+    //     file_name: String,
+    //     fs: Arc<Mutex<FileSystem>>,
+    // ) -> Result<(), Box<dyn Error>> {
+
+    //     fs.lock().await.delete_file(file_hash)
+    // }
+
     async fn sync_with_peer(
         peer_addr: SocketAddr,
         fs: Arc<Mutex<FileSystem>>,
@@ -231,34 +264,34 @@ impl NetworkNode {
     }
 
     pub async fn add_peer(&self, addr: SocketAddr) {
-        let mut peers = self.known_peers.lock().await;
-        if addr != self.addr && !peers.contains(&addr) {
+        let mut peers = self.inner.known_peers.lock().await;
+        if addr != self.inner.addr && !peers.contains(&addr) {
             peers.push(addr);
             drop(peers);
 
             // Send AddPeer message to the new peer
-            if let Err(e) = self.send_add_peer(addr, self.addr).await {
+            if let Err(e) = self.send_add_peer(addr, self.inner.addr).await {
                 eprintln!("Failed to notify peer {}: {}", addr, e);
             }
 
             // Sync files with the new peer
-            if let Err(e) = Self::sync_with_peer(addr, self.fs.clone()).await {
+            if let Err(e) = Self::sync_with_peer(addr, self.inner.fs.clone()).await {
                 eprintln!("Failed to sync with peer {}: {}", addr, e);
             }
         }
     }
 
     pub async fn get_filesystem(&self) -> Arc<Mutex<FileSystem>> {
-        return self.fs.clone();
+        return self.inner.fs.clone();
     }
 
     pub async fn get_peers(&self) -> Vec<SocketAddr> {
-        let peers = self.known_peers.lock().await;
+        let peers = self.inner.known_peers.lock().await;
         peers.clone()
     }
 
     pub async fn get_file(&self, file_hash: [u8; 32]) -> Result<(String, Vec<u8>), Box<dyn Error>> {
-        let fs = self.fs.lock().await;
+        let fs = self.inner.fs.lock().await;
         if let Some(metadata) = fs.get_file_metadata(&file_hash) {
             let file_name = metadata.name.clone();
             let chunk_hashes = metadata.chunk_hashes.clone();
@@ -281,14 +314,14 @@ impl NetworkNode {
         chunk_hash: &[u8; 32],
     ) -> Result<Vec<u8>, Box<dyn Error>> {
         // First try local storage
-        let fs = self.fs.lock().await;
+        let fs = self.inner.fs.lock().await;
         if let Some(chunk) = fs.get_chunk(chunk_hash).await {
             return Ok(chunk);
         }
         drop(fs);
 
         // Then try known locations
-        let locations = self.dht.lock().await;
+        let locations = self.inner.dht.lock().await;
         if let Some(peers) = locations.get(chunk_hash) {
             for &peer_addr in peers {
                 if let Ok(chunk) = self.request_chunk_from_peer(chunk_hash, peer_addr).await {
@@ -327,7 +360,7 @@ impl NetworkNode {
         &self,
         chunk_hash: &[u8; 32],
     ) -> Result<Vec<u8>, Box<dyn Error>> {
-        let peers = self.known_peers.lock().await;
+        let peers = self.inner.known_peers.lock().await;
         for &peer_addr in peers.iter() {
             if let Ok(chunk) = self.request_chunk_from_peer(chunk_hash, peer_addr).await {
                 return Ok(chunk);
@@ -340,7 +373,7 @@ impl NetworkNode {
         &self,
         file_hash: [u8; 32],
     ) -> Result<(String, Vec<u8>), Box<dyn Error>> {
-        let peers = self.known_peers.lock().await;
+        let peers = self.inner.known_peers.lock().await;
         for &peer_addr in peers.iter() {
             let mut stream = TcpStream::connect(peer_addr)?;
             let request = Message::GetFile { file_hash };
@@ -366,7 +399,7 @@ impl NetworkNode {
     }
 
     pub async fn broadcast_new_file(&self, file_hash: [u8; 32]) -> Result<(), Box<dyn Error>> {
-        let peers = self.known_peers.lock().await;
+        let peers = self.inner.known_peers.lock().await;
         for &peer_addr in peers.iter() {
             if let Err(e) = self.notify_peer_new_file(peer_addr, file_hash).await {
                 eprintln!("Failed to notify peer {}: {}", peer_addr, e);
@@ -404,7 +437,7 @@ impl NetworkNode {
     }
 
     pub async fn ping_self_nodes(&self) {
-        let peers = self.known_peers.lock().await;
+        let peers = self.inner.known_peers.lock().await;
         for &peer_addr in peers.iter() {
             if let Err(e) = ping_peer(peer_addr).await {
                 eprintln!("Failed to ping peer {}: {}", peer_addr, e);
