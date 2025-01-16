@@ -1,69 +1,131 @@
-# DFS Project - README
+# DFS Engine Documentation
 
 ## Overview
-The DFS (Distributed File System) project is a peer-to-peer file sharing system with two main components:
-1. **DFS Engine**: The core backend system that handles file distribution and peer management.
-2. **Client UI**: A web-based interface for interacting with the DFS Engine.
+The DFS (Distributed File System) Engine is a peer-to-peer file sharing system implemented in Rust. It consists of a network node system for file distribution and a REST API server for client interactions.
 
-## Project Structure
-- **dfs-engine/**: Contains the Rust-based backend implementation.
-- **client-ui/**: Contains the React-based frontend implementation.
+## System Architecture
 
-## Current Features
-### DFS Engine
-1. Peer-to-peer file sharing and synchronization.
-2. REST API endpoints for file upload, download, and peer management.
-3. Distributed Hash Table (DHT) for file location tracking.
-4. TCP-based communication for peer-to-peer messaging.
-5. Efficient message serialization using `bincode`.
-
-### Client UI
-1. File upload interface.
-2. File listing and download functionality.
-3. Peer management interface.
-4. Node uptime display.
+### Core Components
+1. **NetworkNode**: The main component handling peer-to-peer communications
+2. **FileSystem**: Manages file storage and retrieval
+3. **REST API Server**: Provides HTTP endpoints for client interactions
+4. **DHT (Distributed Hash Table)**: Tracks file locations across the network
 
 ## Workflow Descriptions
 
-### Network Node Operations (DFS Engine)
-1. **Node Initialization**:
-   - Creates an empty `FileSystem`.
-   - Initializes an empty peer list.
-   - Sets up DHT and uptime counter.
-   - Starts a TCP listener for peer connections.
-2. **Peer Synchronization**:
-   - Requests peer file lists and exchanges missing files.
-   - Updates the DHT with new file locations.
+### Network Node Operations
+
+#### Node Startup Process
+1. Node initialization:
+   - Creates empty FileSystem
+   - Initializes empty peer list
+   - Sets up DHT
+   - Starts uptime counter
+2. Starts TCP listener for peer connections
+3. Begins handling incoming connections
+
+#### Peer Management
+1. **Adding Peers**
+   - New peer address is received
+   - Added to known_peers list
+   - Notifies existing peers about new peer
+   - Initiates file sync with new peer
+
+2. **Peer Synchronization**
+   - Request peer's file list
+   - Compare with local files
+   - Exchange missing files
+   - Update DHT with new file locations
 
 ### File Operations
-1. **File Upload**:
-   - Splits files into chunks, hashes them, and distributes them across the network.
-2. **File Download**:
-   - Retrieves file chunks from peers and reassembles them.
-3. **File Deletion**:
-   - Removes file metadata and notifies peers.
 
-## Next Steps
+#### File Upload Process
+1. Client sends file path to REST API
+2. Server reads file from path
+3. File is chunked and hashed
+4. File metadata is created and stored
+5. Chunks are distributed to network
+6. File hash is returned to client
 
-### Frontend Development (client-ui/)
-1. **Implement WebSockets for Real-Time Updates**:
-   - Establish a WebSocket connection with the backend.
-   - Use WebSockets to receive real-time updates for file uploads, peer additions, and synchronization events.
+#### File Download Process
+1. Client requests file by hash
+2. Server checks local storage for file
+3. If not found locally:
+   - Queries network peers
+   - Downloads chunks from available peers
+   - Reassembles file
+4. Returns file data to client
 
-2. **Enhance Error Management**:
-   - Display user-friendly error messages for failed API calls (e.g., file not found, invalid peer address).
-   - Add retry mechanisms for transient errors.
-   - Handle WebSocket connection errors gracefully (e.g., reconnection attempts).
+#### File Deletion
+1. Receives file hash
+2. Removes file metadata
+3. Removes associated chunks
+4. Broadcasts deletion to peers
 
-### Backend Development (dfs-engine/)
-1. **Set Up WebSocket Server**:
-   - Add a WebSocket server to the existing backend to enable real-time communication.
-   - Broadcast events like file uploads, deletions, and peer additions to connected clients.
+### REST API Endpoints
 
-2. **Improve Error Management**:
-   - Ensure proper error handling for REST API endpoints (e.g., invalid input, internal server errors).
-   - Return descriptive error messages to the client.
-   - Add logging for better debugging and monitoring.
+#### GET /files
+1. Retrieves list of files from local node
+2. Converts binary hashes to hex strings
+3. Returns file list with names and hashes
 
+#### POST /files
+1. Receives file path in request body
+2. Validates file existence
+3. Triggers file upload process
+4. Returns file hash
 
+#### GET /files/:hash
+1. Receives file hash parameter
+2. Converts hex hash to binary
+3. Initiates file download process
+4. Returns file data if found
 
+#### GET /peers
+1. Retrieves list of known peers
+2. Formats peer addresses as strings
+3. Returns peer list
+
+#### POST /peers
+1. Receives peer address in request body
+2. Validates address format
+3. Initiates peer addition process
+4. Returns success/failure status
+
+#### GET /uptime
+1. Retrieves node uptime counter
+2. Returns uptime in seconds
+
+### Message Types
+The system uses various message types for peer communication:
+- `GetFile`: Request file metadata
+- `GetChunk`: Request specific file chunk
+- `FileMetadata`: Share file information
+- `ChunkData`: Transfer file chunks
+- `ListFiles`: Request file listing
+- `FileList`: Share file listing
+- `AddPeer`: Notify about new peer
+- `SyncRequest/Response`: Synchronize file lists
+- `Ping/Pong`: Check peer availability
+
+## Network Communication
+1. **TCP Connections**
+   - Used for all peer-to-peer communication
+   - Handles large data transfers (chunks)
+   - Maintains persistent connections when needed
+
+2. **Message Serialization**
+   - Uses bincode for efficient binary serialization
+   - Handles all message types uniformly
+   - Includes error handling for failed transfers
+
+## State Management
+1. **Shared State**
+   - FileSystem state shared via Arc<Mutex>
+   - Peer list managed with concurrent access
+   - DHT updated across all operations
+
+2. **Synchronization**
+   - Uses Tokio for async operations
+   - Mutex locks for thread-safe state access
+   - Handles concurrent file operations
