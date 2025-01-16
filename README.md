@@ -129,5 +129,3 @@ The system uses various message types for peer communication:
    - Uses Tokio for async operations
    - Mutex locks for thread-safe state access
    - Handles concurrent file operations
-
----
