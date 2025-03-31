@@ -145,7 +145,6 @@ async fn handle_list(node: &NetworkNode) -> Result<(), Box<dyn Error>> {
 async fn list_peers(node: &NetworkNode) {
     println!("\n{}", "===listing peers===");
     let peers = node.get_peers().await;
-    let peers = peers.lock().await;
 
     if !peers.is_empty() {
         for peer in &*peers {

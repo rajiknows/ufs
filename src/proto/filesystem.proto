@@ -3,69 +3,103 @@ syntax = "proto3";
 package filesystem;
 
 service FileSystemService {
-    // List all files
-    rpc ListFiles (ListFilesRequest) returns (ListFilesResponse);
-    // Upload a file (client streaming)
-    rpc UploadFile (stream UploadFileRequest) returns (UploadFileResponse);
-    // Download a file (server streaming)
-    rpc DownloadFile (DownloadFileRequest) returns (stream DownloadFileResponse);
-    // List all peers
-    rpc ListPeers (ListPeersRequest) returns (ListPeersResponse);
-    // Add a new peer
-    rpc AddPeer (AddPeerRequest) returns (AddPeerResponse);
-    // Get node uptime
-    rpc GetUptime (GetUptimeRequest) returns (GetUptimeResponse);
+  rpc Start(StartRequest) returns (StartResponse);
+  // List all files
+  rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
+  // Upload a file (client streaming)
+  rpc UploadFile(stream UploadFileRequest) returns (UploadFileResponse);
+  // Download a file (server streaming)
+  rpc DownloadFile(DownloadFileRequest) returns (stream DownloadFileResponse);
+  // List all peers
+  rpc ListPeers(ListPeersRequest) returns (ListPeersResponse);
+  // Add a new peer
+  rpc AddPeer(AddPeerRequest) returns (AddPeerResponse);
+  // Get node uptime
+  rpc GetUptime(GetUptimeRequest) returns (GetUptimeResponse);
+
+  // not to node communications
+  rpc GetChunk(GetChunkRequest) returns (GetChunkResponse);
+  rpc GetFile(GetFileRequest) returns (GetFileResponse);
+  rpc Sync(SyncRequest) returns (SyncResponse);
+  rpc NotifyNewFile(NewFileRequest) returns (NewFileResponse);
 }
+
+message StartRequest{}
+message StartResponse{}
 
 // Messages for ListFiles
 message ListFilesRequest {}
 message ListFilesResponse {
-    repeated FileInfo files = 1;
+  repeated FileInfo files = 1;
 }
 message FileInfo {
-    string name = 1;
-    string hash = 2;
+  string name = 1;
+  string hash = 2;
 }
 
 // Messages for UploadFile
 message UploadFileRequest {
-    oneof content {
-        FileMetadata metadata = 1;  // Sent first with file name
-        bytes chunk = 2;           // Subsequent chunks of file content
-    }
+  oneof content {
+    FileMetadata metadata = 1; // Sent first with file name
+    bytes chunk = 2; // Subsequent chunks of file content
+  }
 }
 message FileMetadata {
-    string name = 1;
+  string name = 1;
 }
 message UploadFileResponse {
-    string hash = 1;
+  string hash = 1;
 }
 
 // Messages for DownloadFile
 message DownloadFileRequest {
-    string hash = 1;
+  string hash = 1;
 }
 message DownloadFileResponse {
-    bytes chunk = 1;
+  bytes chunk = 1;
 }
 
 // Messages for ListPeers
 message ListPeersRequest {}
 message ListPeersResponse {
-    repeated string peers = 1;
+  repeated string peers = 1;
 }
 
 // Messages for AddPeer
 message AddPeerRequest {
-    string peer_address = 1;
+  string peer_address = 1;
 }
 message AddPeerResponse {
-    bool success = 1;
-    string message = 2;
+  bool success = 1;
+  string message = 2;
 }
 
 // Messages for GetUptime
 message GetUptimeRequest {}
 message GetUptimeResponse {
-    uint64 uptime_seconds = 1;
+  uint64 uptime_seconds = 1;
 }
+
+message GetChunkRequest {
+    bytes chunk_hash = 1;
+}
+message GetChunkResponse {
+    bytes chunk_data = 1;
+}
+
+message GetFileRequest {
+    bytes file_hash = 1;
+}
+message GetFileResponse {
+    FileInfo metadata = 1;
+}
+
+message SyncRequest {}
+message SyncResponse {
+    repeated FileInfo files = 1;
+}
+
+message NewFileRequest {
+    bytes file_hash = 1;
+}
+message NewFileResponse {}

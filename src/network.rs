@@ -1,3 +1,4 @@
+use futures::future::ok;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
@@ -7,8 +8,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
+use tonic::transport::Channel;
 
 use crate::fs::{FileInfo, FileSystem};
+use crate::grpc::filesystem::file_system_service_client::FileSystemServiceClient;
+use crate::grpc::filesystem::{
+    AddPeerRequest, GetChunkRequest, GetFileRequest, NewFileRequest, SyncRequest,
+};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Message {
@@ -44,6 +50,13 @@ pub struct NetworkNode {
 }
 
 impl NetworkNode {
+    async fn get_client(
+        &self,
+        peer_addr: SocketAddr,
+    ) -> Result<FileSystemServiceClient<Channel>, Box<dyn Error>> {
+        Ok(FileSystemServiceClient::connect(format!("http://{}", peer_addr)).await?)
+    }
+
     pub fn new(addr: SocketAddr) -> Self {
         NetworkNode {
             inner: Arc::new(NetworkNodeInner {
@@ -66,8 +79,8 @@ impl NetworkNode {
         *is_started = true;
         drop(is_started); // Release the lock
 
-        let listener = TcpListener::bind(self.inner.addr)?;
-        println!("Listening on {}", self.inner.addr);
+        // let listener = TcpListener::bind(self.inner.addr)?;
+        // println!("Listening on {}", self.inner.addr);
 
         let uptime = self.inner.uptime.clone();
 
@@ -81,22 +94,7 @@ impl NetworkNode {
                 sleep(Duration::from_secs(1)).await;
             }
         });
-
-        // Handle incoming connections
-        loop {
-            let (socket, peer_addr) = listener.accept()?;
-            println!("New connection from {}", peer_addr);
-
-            let fs = self.inner.fs.clone();
-            let _dht = self.inner.dht.clone();
-            let known_peers = self.inner.known_peers.clone();
-
-            tokio::spawn(async move {
-                if let Err(e) = handle_connection(socket, fs, known_peers).await {
-                    eprintln!("Error handling connection: {}", e);
-                }
-            });
-        }
+        return Ok(());
     }
 
     pub async fn get_uptime(&self) -> Result<u32, ()> {
@@ -110,28 +108,16 @@ impl NetworkNode {
         files
     }
 
-    pub async fn sync_with_peer(
-        peer_addr: SocketAddr,
-        fs: Arc<Mutex<FileSystem>>,
-    ) -> Result<(), Box<dyn Error>> {
-        let mut stream = TcpStream::connect(peer_addr)?;
-        let request = Message::SyncRequest;
-        let serialized = bincode::serialize(&request)?;
-        stream.write_all(&serialized)?;
-
-        let mut buffer = vec![0; 1024 * 1024];
-        let n = stream.read(&mut buffer)?;
-
-        match bincode::deserialize(&buffer[..n])? {
-            Message::SyncResponse { files } => {
-                let mut fs = fs.lock().await;
-                for file_info in files {
-                    fs.add_file_metadata(file_info.filehash, file_info);
-                }
-                Ok(())
-            }
-            _ => Err("Unexpected response during sync".into()),
+    async fn sync_with_peer(&self, peer_addr: SocketAddr) -> Result<(), Box<dyn Error>> {
+        let mut client = self.get_client(peer_addr).await?;
+        let request = tonic::Request::new(SyncRequest {});
+        let response = client.sync(request).await?;
+        let files = response.into_inner().files;
+        let mut fs = self.inner.fs.lock().await;
+        for file_info in files {
+            fs.add_file_metadata(file_info.hash.try_into()?, file_info.into());
         }
+        Ok(())
     }
 
     pub async fn add_peer(&self, addr: SocketAddr) {
@@ -140,13 +126,11 @@ impl NetworkNode {
             peers.push(addr);
             drop(peers);
 
-            // Send AddPeer message to the new peer
             if let Err(e) = self.send_add_peer(addr, self.inner.addr).await {
                 eprintln!("Failed to notify peer {}: {}", addr, e);
             }
 
-            // Sync files with the new peer
-            if let Err(e) = Self::sync_with_peer(addr, self.inner.fs.clone()).await {
+            if let Err(e) = self.sync_with_peer(addr).await {
                 eprintln!("Failed to sync with peer {}: {}", addr, e);
             }
         }
@@ -211,20 +195,12 @@ impl NetworkNode {
         chunk_hash: &[u8; 32],
         peer_addr: SocketAddr,
     ) -> Result<Vec<u8>, Box<dyn Error>> {
-        let mut stream = TcpStream::connect(peer_addr)?;
-        let request = Message::GetChunk {
-            chunk_hash: *chunk_hash,
-        };
-        let serialized = bincode::serialize(&request)?;
-        stream.write_all(&serialized)?;
-
-        let mut buffer = vec![0; 1024 * 1024];
-        let n = stream.read(&mut buffer)?;
-
-        match bincode::deserialize(&buffer[..n])? {
-            Message::ChunkData { chunk } => Ok(chunk),
-            _ => Err("Unexpected response".into()),
-        }
+        let mut client = self.get_client(peer_addr).await?;
+        let request = tonic::Request::new(GetChunkRequest {
+            chunk_hash: chunk_hash.to_vec(),
+        });
+        let response = client.get_chunk(request).await?;
+        Ok(response.into_inner().chunk_data)
     }
 
     async fn broadcast_chunk_request(
@@ -246,24 +222,21 @@ impl NetworkNode {
     ) -> Result<(String, Vec<u8>), Box<dyn Error>> {
         let peers = self.inner.known_peers.lock().await;
         for &peer_addr in peers.iter() {
-            let mut stream = TcpStream::connect(peer_addr)?;
-            let request = Message::GetFile { file_hash };
-            let serialized = bincode::serialize(&request)?;
-            stream.write_all(&serialized)?;
-
-            let mut buffer = vec![0; 1024 * 1024];
-            let n = stream.read(&mut buffer)?;
-
-            match bincode::deserialize(&buffer[..n])? {
-                Message::FileMetadata { metadata } => {
-                    let mut file_data = Vec::with_capacity(metadata.total_size);
-                    for chunk_hash in &metadata.chunk_hashes {
-                        let chunk = self.get_chunk_from_network(chunk_hash).await?;
+            let mut client = self.get_client(peer_addr).await?;
+            let request = tonic::Request::new(GetFileRequest {
+                file_hash: file_hash.to_vec(),
+            });
+            match client.get_file(request).await {
+                Ok(response) => {
+                    let metadata = response.into_inner().metadata.ok_or("No metadata")?;
+                    let mut file_data = Vec::with_capacity(metadata.total_size as usize);
+                    for chunk_hash in &metadata.hash {
+                        let chunk = self.get_chunk_from_network(&chunk_hash.try_into()?).await?;
                         file_data.extend_from_slice(&chunk);
                     }
                     return Ok((metadata.name, file_data));
                 }
-                _ => continue,
+                Err(_) => continue,
             }
         }
         Err("File not found in network".into())
@@ -284,10 +257,11 @@ impl NetworkNode {
         peer_addr: SocketAddr,
         file_hash: [u8; 32],
     ) -> Result<(), Box<dyn Error>> {
-        let mut stream = TcpStream::connect(peer_addr)?;
-        let message = Message::NewFile { file_hash };
-        let serialized = bincode::serialize(&message)?;
-        stream.write_all(&serialized)?;
+        let mut client = self.get_client(peer_addr).await?;
+        let request = tonic::Request::new(NewFileRequest {
+            file_hash: file_hash.to_vec(),
+        });
+        client.notify_new_file(request).await?;
         Ok(())
     }
 
@@ -296,23 +270,20 @@ impl NetworkNode {
         peer_addr: SocketAddr,
         new_peer: SocketAddr,
     ) -> Result<(), Box<dyn Error>> {
-        let mut stream = TcpStream::connect(peer_addr)?;
-        let message = Message::AddPeer {
-            peer_addr: new_peer,
-        };
-        let serialized = bincode::serialize(&message)?;
-        stream.write_all(&serialized)?;
-        let mut buffer = vec![0; 1024];
-        stream.read(&mut buffer)?; // Wait for acknowledgment
+        let mut client = self.get_client(peer_addr).await?;
+        let request = tonic::Request::new(AddPeerRequest {
+            peer_address: new_peer.to_string(),
+        });
+        client.add_peer(request).await?;
         Ok(())
     }
-
-    pub async fn ping_self_nodes(&self) {
-        let peers = self.inner.known_peers.lock().await;
-        for &peer_addr in peers.iter() {
-            if let Err(e) = ping_peer(peer_addr).await {
-                eprintln!("Failed to ping peer {}: {}", peer_addr, e);
-            }
-        }
-    }
+    //
+    //pub async fn ping_self_nodes(&self) {
+    //    let peers = self.inner.known_peers.lock().await;
+    //    for &peer_addr in peers.iter() {
+    //        if let Err(e) = ping_peer(peer_addr).await {
+    //            eprintln!("Failed to ping peer {}: {}", peer_addr, e);
+    //        }
+    //    }
+    //}
 }

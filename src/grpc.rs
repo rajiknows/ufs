@@ -1,3 +1,4 @@
+use futures::future::ok;
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -21,11 +22,17 @@ pub struct FileSystemServer {
 
 #[tonic::async_trait]
 impl FileSystemService for FileSystemServer {
+    async fn start(&self, _: Request<StartRequest>) -> Result<Response<StartResponse>, Status> {
+        self.node.start();
+        let response = StartResponse {};
+        Ok(Response::new(response))
+    }
+
     async fn list_files(
         &self,
         _: Request<ListFilesRequest>,
     ) -> Result<Response<ListFilesResponse>, Status> {
-        let files = self.node.filesystem.list_files(); // Adjust based on your API
+        let files = self.node.list_files();
         let response = ListFilesResponse {
             files: files
                 .into_iter()
@@ -67,12 +74,12 @@ impl FileSystemService for FileSystemServer {
         request: Request<DownloadFileRequest>,
     ) -> Result<Response<Self::DownloadFileStream>, Status> {
         let hash = request.into_inner().hash;
-        let temp_path = self.node.download_file(&hash).await?; // Returns path to reassembled file
+        let temp_path = self.node.get_file(hash.into()).await?;
         let (tx, rx) = tokio::sync::mpsc::channel(4);
 
         tokio::spawn(async move {
             let mut file = File::open(&temp_path).await?;
-            let mut buffer = vec![0u8; 1024 * 1024]; // 1MB chunks
+            let mut buffer = vec![0u8; 1024 * 1024];
             loop {
                 let n = file.read(&mut buffer).await?;
                 if n == 0 {
@@ -94,7 +101,7 @@ impl FileSystemService for FileSystemServer {
         &self,
         _: Request<ListPeersRequest>,
     ) -> Result<Response<ListPeersResponse>, Status> {
-        let peers = self.node.list_peers(); // Adjust based on your API
+        let peers = self.node.get_peers().await;
         Ok(Response::new(ListPeersResponse { peers }))
     }
 
@@ -103,7 +110,7 @@ impl FileSystemService for FileSystemServer {
         request: Request<AddPeerRequest>,
     ) -> Result<Response<AddPeerResponse>, Status> {
         let peer_address = request.into_inner().peer_address;
-        let success = self.node.add_peer(&peer_address).is_ok(); // Adjust based on your API
+        let success = self.node.add_peer(&peer_address.parse());
         Ok(Response::new(AddPeerResponse {
             success,
             message: if success {
@@ -115,11 +122,76 @@ impl FileSystemService for FileSystemServer {
         }))
     }
 
+    async fn get_chunk(
+        &self,
+        request: Request<GetChunkRequest>,
+    ) -> Result<Response<GetChunkResponse>, Status> {
+        let chunk_hash = request.into_inner().chunk_hash;
+        let fs = self.node.inner.fs.lock().await;
+        if let Some(chunk) = fs
+            .get_chunk(
+                &chunk_hash
+                    .try_into()
+                    .map_err(|_| Status::invalid_argument("Invalid chunk hash"))?,
+            )
+            .await
+        {
+            Ok(Response::new(GetChunkResponse { chunk_data: chunk }))
+        } else {
+            Err(Status::not_found("Chunk not found"))
+        }
+    }
+
+    async fn get_file(
+        &self,
+        request: Request<GetFileRequest>,
+    ) -> Result<Response<GetFileResponse>, Status> {
+        let file_hash = request.into_inner().file_hash;
+        let fs = self.node.inner.fs.lock().await;
+        if let Some(metadata) = fs.get_file_metadata(
+            &file_hash
+                .try_into()
+                .map_err(|_| Status::invalid_argument("Invalid file hash"))?,
+        ) {
+            Ok(Response::new(GetFileResponse {
+                metadata: Some(metadata.into()),
+            }))
+        } else {
+            Err(Status::not_found("File not found"))
+        }
+    }
+
+    async fn sync(&self, _: Request<SyncRequest>) -> Result<Response<SyncResponse>, Status> {
+        let fs = self.node.inner.fs.lock().await;
+        let files = fs
+            .list_files()
+            .into_iter()
+            .map(|(hash, name)| FileInfo {
+                name,
+                hash: hash.to_vec(),
+                total_size: 0,        // Adjust based on your FileSystem implementation
+                chunk_hashes: vec![], // Populate if metadata is available
+            })
+            .collect();
+        Ok(Response::new(SyncResponse { files }))
+    }
+
+    async fn notify_new_file(
+        &self,
+        request: Request<NewFileRequest>,
+    ) -> Result<Response<NewFileResponse>, Status> {
+        let file_hash = request.into_inner().file_hash;
+        // Optionally trigger a fetch or just note the file's existence
+        let mut fs = self.node.inner.fs.lock().await;
+        // Placeholder: Add logic to handle new file notification if needed
+        Ok(Response::new(NewFileResponse {}))
+    }
+
     async fn get_uptime(
         &self,
         _: Request<GetUptimeRequest>,
     ) -> Result<Response<GetUptimeResponse>, Status> {
-        let uptime_seconds = self.node.uptime(); // Adjust based on your API
+        let uptime_seconds = self.node.get_uptime();
         Ok(Response::new(GetUptimeResponse { uptime_seconds }))
     }
 }
