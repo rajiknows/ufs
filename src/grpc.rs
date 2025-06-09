@@ -1,4 +1,3 @@
-use futures::future::ok;
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -7,7 +6,7 @@ use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 pub mod filesystem {
-    tonic::include_proto!("filesystem"); // Include generated code
+    tonic::include_proto!("filesystem");
 }
 
 use filesystem::file_system_service_server::FileSystemService;
@@ -15,7 +14,6 @@ use filesystem::*;
 
 use crate::network::NetworkNode;
 
-// Assume NetworkNode is your existing type
 pub struct FileSystemServer {
     pub node: Arc<NetworkNode>,
 }

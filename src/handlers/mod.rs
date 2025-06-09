@@ -1,9 +1,8 @@
-use std::io::{Read, Write};
+use std::io::Read;
 use std::net::TcpStream;
 use std::{error::Error, net::SocketAddr, sync::Arc};
 use tokio::sync::Mutex;
 
-use crate::network::NetworkNode;
 use crate::{fs::FileSystem, network::Message};
 
 pub async fn handle_connection(

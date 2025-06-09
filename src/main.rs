@@ -10,6 +10,7 @@ use grpc::FileSystemServer;
 use network::NetworkNode;
 
 use filesystem::file_system_service_server::FileSystemServiceServer;
+mod kv;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
