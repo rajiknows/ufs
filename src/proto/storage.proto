@@ -1,4 +1,3 @@
-
 syntax = "proto3";
 
 package storage;
@@ -19,6 +18,10 @@ service PeerService {
 
   // Instructs a peer to store a replica of a chunk.
   rpc StoreChunk(StoreChunkRequest) returns (StoreChunkResponse);
+
+  // Instructs a peer to store file metadata.
+  rpc StoreFileMetadata(StoreFileMetadataRequest)
+      returns (StoreFileMetadataResponse);
 
   // Asks a peer for a list of its known peers.
   rpc ListPeers(ListPeersRequest) returns (ListPeersResponse);
@@ -73,13 +76,18 @@ message StoreChunkRequest {
 
 message StoreChunkResponse { bool success = 1; }
 
+message StoreFileMetadataRequest {
+  bytes file_hash = 1;
+  bytes metadata = 2;
+}
+
+message StoreFileMetadataResponse { bool success = 1; }
+
 // === Peer Listing Messages ===
 
 message ListPeersRequest {}
 
-message ListPeersResponse {
-  repeated string peers = 1;
-}
+message ListPeersResponse { repeated string peers = 1; }
 
 // === File Listing Messages ===
 
@@ -87,10 +95,9 @@ message FileInfo {
   string name = 1;
   uint64 size = 2;
   repeated bytes chunk_hashes = 3;
+  // bytes file_hash = 4;
 }
 
 message ListFilesRequest {}
 
-message ListFilesResponse {
-  repeated FileInfo files = 1;
-}
+message ListFilesResponse { repeated FileInfo files = 1; }

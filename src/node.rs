@@ -93,6 +93,14 @@ impl Node {
         self.storage.get_all_metadata()
     }
 
+    pub async fn store_metadata(
+        &self,
+        hash: &[u8],
+        metadata: crate::storage::FileInfo,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.storage.store_metadata(hash, &metadata)
+    }
+
     pub async fn handle_gossip(&self, hashes: Vec<Vec<u8>>) {
         log::info!("Handling gossip with {} hashes", hashes.len());
         let known_hashes = self.storage.get_all_chunk_hashes().unwrap_or_default();
@@ -108,7 +116,7 @@ impl Node {
                     log::warn!("No peers to request metadata from.");
                     continue;
                 }
-                let random_peer = peers[rand::random::<usize>() % peers.len()].clone();
+                let random_peer = peers[rand::random::<u32>() as usize % peers.len()].clone();
                 match self.request_metadata(&random_peer, &hash).await {
                     Ok(_) => log::info!("Successfully requested metadata"),
                     Err(e) => log::warn!("Failed to request metadata: {e}"),

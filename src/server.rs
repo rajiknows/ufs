@@ -3,10 +3,11 @@ use crate::storage_proto::{
     peer_service_server::{PeerService, PeerServiceServer},
     GetChunkRequest, GetChunkResponse, GetFileMetadataRequest, GetFileMetadataResponse,
     GossipMessage, GossipResponse, PeerRequest, PeerResponse, StoreChunkRequest,
-    StoreChunkResponse,
+    StoreChunkResponse, StoreFileMetadataRequest, StoreFileMetadataResponse,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
+use tonic::transport::Channel;
 use tonic::{transport::Server, Request, Response, Status};
 
 pub struct PeerServer {
@@ -31,6 +32,25 @@ impl PeerService for PeerServer {
         let known_peers = self.node.get_peers().await;
         let response = PeerResponse { known_peers };
         Ok(Response::new(response))
+    }
+
+    async fn store_file_metadata(
+        &self,
+        request: tonic::Request<StoreFileMetadataRequest>,
+    ) -> Result<Response<StoreFileMetadataResponse>, Status> {
+        let req = request.into_inner();
+        log::info!(
+            "Received request to store file metadata for hash {}",
+            hex::encode(&req.file_hash)
+        );
+
+        let metadata: crate::storage::FileInfo = bincode::deserialize(&req.metadata)
+            .map_err(|e| Status::internal(format!("Failed to deserialize metadata: {}", e)))?;
+
+        match self.node.store_metadata(&req.file_hash, metadata).await {
+            Ok(_) => Ok(Response::new(StoreFileMetadataResponse { success: true })),
+            Err(e) => Err(Status::internal(e.to_string())),
+        }
     }
 
     /// The main entry point for the gossip protocol.

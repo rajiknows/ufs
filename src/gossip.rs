@@ -1,5 +1,6 @@
 use crate::storage::Storage;
 use crate::storage_proto::peer_service_client::PeerServiceClient;
+use rand::Rng;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -26,7 +27,8 @@ impl Gossip {
             }
 
             log::info!("Executing gossip tick...");
-            let random_peer = peers[rand::random::<usize>() % peers.len()].clone();
+            let random_peer = rand::rng().random::<u32>();
+            let random_peer = peers[random_peer as usize % peers.len()].clone();
             self.gossip_with_peer(&random_peer).await;
         }
     }
