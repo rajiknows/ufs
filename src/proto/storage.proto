@@ -1,0 +1,68 @@
+
+syntax = "proto3";
+
+package storage;
+
+// The main service running on each peer.
+service PeerService {
+  // Exchanges peer lists with another node. Used for discovery.
+  rpc SharePeers(PeerRequest) returns (PeerResponse);
+
+  // The main gossip endpoint. Nodes push their known metadata here.
+  rpc Gossip(GossipMessage) returns (GossipResponse);
+
+  // Asks a peer for a specific chunk of a file.
+  rpc GetChunk(GetChunkRequest) returns (GetChunkResponse);
+
+  // Asks a peer for the metadata of a specific file.
+  rpc GetFileMetadata(GetFileMetadataRequest) returns (GetFileMetadataResponse);
+
+  // Instructs a peer to store a replica of a chunk.
+  rpc StoreChunk(StoreChunkRequest) returns (StoreChunkResponse);
+}
+
+// === Peer Discovery Messages ===
+
+message PeerRequest {
+  // The list of peers known to the requesting node.
+  repeated string known_peers = 1;
+  // The address of the requesting node.
+  string from_address = 2;
+}
+
+message PeerResponse {
+  // The list of peers known to the responding node.
+  repeated string known_peers = 1;
+}
+
+// === Gossip Messages ===
+
+message GossipMessage {
+  // A list of file hashes the sender knows about.
+  repeated string file_hashes = 1;
+}
+
+message GossipResponse {
+  // A simple acknowledgement.
+  bool success = 1;
+}
+
+// === File & Chunk Transfer Messages ===
+
+message GetChunkRequest { bytes chunk_hash = 1; }
+
+message GetChunkResponse { bytes chunk_data = 1; }
+
+message GetFileMetadataRequest { bytes file_hash = 1; }
+
+message GetFileMetadataResponse {
+  // Will contain the serialized FileInfo struct.
+  bytes metadata = 1;
+}
+
+message StoreChunkRequest {
+  bytes chunk_hash = 1;
+  bytes chunk_data = 2;
+}
+
+message StoreChunkResponse { bool success = 1; }
