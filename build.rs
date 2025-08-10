@@ -1,4 +1,3 @@
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tonic_build::compile_protos("src/proto/filesystem.proto")?;
-    Ok(())
+fn main() {
+    tonic_build::compile_protos("src/proto/storage.proto").expect("Failed to compile proto");
 }
