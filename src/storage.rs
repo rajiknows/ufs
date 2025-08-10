@@ -1,9 +1,9 @@
-use rocksdb::{Options, DB};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use sled::{Db, Tree};
 
-const CHUNKS_CF: &str = "chunks";
-const METADATA_CF: &str = "metadata";
+const CHUNKS_TREE: &str = "chunks";
+const METADATA_TREE: &str = "metadata";
 
 /// Represents the metadata for a single file.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -13,33 +13,31 @@ pub struct FileInfo {
     pub chunk_hashes: Vec<Vec<u8>>,
 }
 
-/// Manages the RocksDB database.
+/// Manages the Sled database.
 pub struct Storage {
-    db: DB,
+    db: Db,
+    chunks: Tree,
+    metadata: Tree,
 }
 
 impl Storage {
     /// Opens the database at the given path.
-    /// Creates column families if they don't exist.
-    pub fn new(path: &str) -> Result<Self, rocksdb::Error> {
-        let mut opts = Options::default();
-        opts.create_if_missing(true);
-        opts.create_missing_column_families(true);
-
-        let db = DB::open_cf(&opts, path, vec![CHUNKS_CF, METADATA_CF])?;
-        Ok(Storage { db })
+    pub fn new(path: &str) -> Result<Self, sled::Error> {
+        let db = sled::open(path)?;
+        let chunks = db.open_tree(CHUNKS_TREE)?;
+        let metadata = db.open_tree(METADATA_TREE)?;
+        Ok(Storage { db, chunks, metadata })
     }
 
     /// Stores a raw data chunk, keyed by its SHA256 hash.
-    pub fn store_chunk(&self, hash: &[u8], data: &[u8]) -> Result<(), rocksdb::Error> {
-        let cf = self.db.cf_handle(CHUNKS_CF).unwrap();
-        self.db.put_cf(cf, hash, data)
+    pub fn store_chunk(&self, hash: &[u8], data: &[u8]) -> Result<(), sled::Error> {
+        self.chunks.insert(hash, data)?;
+        Ok(())
     }
 
     /// Retrieves a chunk by its hash.
-    pub fn get_chunk(&self, hash: &[u8]) -> Result<Option<Vec<u8>>, rocksdb::Error> {
-        let cf = self.db.cf_handle(CHUNKS_CF).unwrap();
-        self.db.get_cf(cf, hash)
+    pub fn get_chunk(&self, hash: &[u8]) -> Result<Option<Vec<u8>>, sled::Error> {
+        self.chunks.get(hash).map(|opt| opt.map(|v| v.to_vec()))
     }
 
     /// Stores serialized file metadata, keyed by its hash.
@@ -48,9 +46,8 @@ impl Storage {
         hash: &[u8],
         metadata: &FileInfo,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let cf = self.db.cf_handle(METADATA_CF).unwrap();
         let serialized = bincode::serialize(metadata)?;
-        self.db.put_cf(cf, hash, serialized)?;
+        self.metadata.insert(hash, serialized)?;
         Ok(())
     }
 
@@ -59,14 +56,33 @@ impl Storage {
         &self,
         hash: &[u8],
     ) -> Result<Option<FileInfo>, Box<dyn std::error::Error>> {
-        let cf = self.db.cf_handle(METADATA_CF).unwrap();
-        match self.db.get_cf(cf, hash)? {
+        match self.metadata.get(hash)? {
             Some(data) => {
                 let metadata: FileInfo = bincode::deserialize(&data)?;
                 Ok(Some(metadata))
             }
             None => Ok(None),
         }
+    }
+
+    /// Retrieves all chunk hashes from the database.
+    pub fn get_all_chunk_hashes(&self) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
+        let mut hashes = Vec::new();
+        for key in self.chunks.iter().keys() {
+            hashes.push(key?.to_vec());
+        }
+        Ok(hashes)
+    }
+
+    /// Retrieves all file metadata from the database.
+    pub fn get_all_metadata(&self) -> Result<Vec<FileInfo>, Box<dyn std::error::Error>> {
+        let mut metadata = Vec::new();
+        for item in self.metadata.iter() {
+            let (_, value) = item?;
+            let file_info: FileInfo = bincode::deserialize(&value)?;
+            metadata.push(file_info);
+        }
+        Ok(metadata)
     }
 }
 

@@ -45,7 +45,7 @@ struct CliArgs {
     /// The address of the node to connect to.
     #[arg(
         long,
-        default_value = "[http://127.0.0.1:50051](http://127.0.0.1:50051)"
+        default_value = "http://127.0.0.1:50051"
     )]
     node_addr: String,
     #[command(subcommand)]

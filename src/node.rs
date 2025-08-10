@@ -3,75 +3,132 @@ use crate::storage::Storage;
 use crate::storage_proto::peer_service_client::PeerServiceClient;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tonic::transport::Channel;
 
-/// The central state and logic container for a peer.
 #[derive(Clone)]
 pub struct Node {
-    /// The persistent key-value store for chunks and metadata.
     storage: Arc<Storage>,
-    /// The list of known peer addresses (e.g., "[http://127.0.0.1:50051](http://127.0.0.1:50051)").
     peers: Arc<Mutex<Vec<String>>>,
-    /// The gossip protocol handler.
     gossip: Arc<Gossip>,
+    address: String,
 }
 
 impl Node {
-    /// Creates a new Node.
-    pub fn new(db_path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(db_path: &str, address: String) -> Result<Self, Box<dyn std::error::Error>> {
         let storage = Arc::new(Storage::new(db_path)?);
         let peers = Arc::new(Mutex::new(Vec::new()));
-        let gossip = Arc::new(Gossip::new(peers.clone()));
+        let gossip = Arc::new(Gossip::new(peers.clone(), storage.clone()));
 
         Ok(Node {
             storage,
             peers,
             gossip,
+            address,
         })
     }
 
-    /// Starts the node's background tasks.
     pub async fn start(
         &self,
         bootstrap_peer: Option<String>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // If a bootstrap peer is provided, connect to it to get an initial peer list.
         if let Some(addr) = bootstrap_peer {
             self.bootstrap(addr).await?;
         }
-
-        // Start the gossip background task.
         let gossip_clone = self.gossip.clone();
         tokio::spawn(async move {
             gossip_clone.start().await;
         });
-
         Ok(())
     }
 
-    /// Connects to a bootstrap peer to populate the initial peer list.
     async fn bootstrap(&self, addr: String) -> Result<(), Box<dyn std::error::Error>> {
         log::info!("Bootstrapping with peer at {}", addr);
-        // TODO:
-        // 1. Create a gRPC client to the bootstrap peer.
-        // 2. Call the `SharePeers` RPC.
-        // 3. Add the returned peers to our own peer list.
-        // self.add_peers(response.known_peers).await;
+        let mut client = PeerServiceClient::connect(addr).await?;
+        let response = client
+            .share_peers(tonic::Request::new(crate::storage_proto::PeerRequest {
+                known_peers: self.get_peers().await,
+                from_address: self.address.clone(),
+            }))
+            .await?
+            .into_inner();
+
+        self.add_peers(response.known_peers).await;
         Ok(())
     }
 
-    /// Retrieves a list of all known peers.
     pub async fn get_peers(&self) -> Vec<String> {
         self.peers.lock().await.clone()
     }
 
-    /// Stores a chunk in the local database.
-    pub async fn store_chunk(&self, hash: &[u8], data: &[u8]) -> Result<(), rocksdb::Error> {
+    pub async fn add_peers(&self, peers: Vec<String>) {
+        for peer in peers {
+            self.add_peer(peer).await;
+        }
+    }
+
+    pub async fn add_peer(&self, peer: String) {
+        let mut peers = self.peers.lock().await;
+        if !peers.contains(&peer) {
+            peers.push(peer);
+        }
+    }
+
+    pub async fn store_chunk(&self, hash: &[u8], data: &[u8]) -> Result<(), sled::Error> {
         self.storage.store_chunk(hash, data)
     }
 
-    /// Retrieves a chunk from the local database.
-    pub async fn get_chunk(&self, hash: &[u8]) -> Result<Option<Vec<u8>>, rocksdb::Error> {
+    pub async fn get_chunk(&self, hash: &[u8]) -> Result<Option<Vec<u8>>, sled::Error> {
         self.storage.get_chunk(hash)
+    }
+
+    pub async fn get_metadata(
+        &self,
+        hash: &[u8],
+    ) -> Result<Option<crate::storage::FileInfo>, Box<dyn std::error::Error>> {
+        self.storage.get_metadata(hash)
+    }
+
+    pub async fn get_all_metadata(
+        &self,
+    ) -> Result<Vec<crate::storage::FileInfo>, Box<dyn std::error::Error>> {
+        self.storage.get_all_metadata()
+    }
+
+    pub async fn handle_gossip(&self, hashes: Vec<Vec<u8>>) {
+        log::info!("Handling gossip with {} hashes", hashes.len());
+        let known_hashes = self.storage.get_all_chunk_hashes().unwrap_or_default();
+
+        for hash in hashes {
+            if !known_hashes.contains(&hash) {
+                log::info!(
+                    "Requesting metadata for unknown hash {}",
+                    hex::encode(&hash)
+                );
+                let peers = self.get_peers().await;
+                if peers.is_empty() {
+                    log::warn!("No peers to request metadata from.");
+                    continue;
+                }
+                let random_peer = peers[rand::random::<usize>() % peers.len()].clone();
+                match self.request_metadata(&random_peer, &hash).await {
+                    Ok(_) => log::info!("Successfully requested metadata"),
+                    Err(e) => log::warn!("Failed to request metadata: {e}"),
+                }
+            }
+        }
+    }
+
+    async fn request_metadata(
+        &self,
+        peer_addr: &str,
+        hash: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut client = PeerServiceClient::connect(peer_addr.to_string()).await?;
+        let request = tonic::Request::new(crate::storage_proto::GetFileMetadataRequest {
+            file_hash: hash.to_vec(),
+        });
+        let response = client.get_file_metadata(request).await?.into_inner();
+        let metadata: crate::storage::FileInfo = bincode::deserialize(&response.metadata)?;
+        self.storage.store_metadata(hash, &metadata)?;
+        Ok(())
     }
 }

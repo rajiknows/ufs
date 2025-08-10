@@ -1,5 +1,5 @@
-use crate::main::CliCommands;
 use crate::storage_proto::peer_service_client::PeerServiceClient;
+use crate::CliCommands;
 use tonic::transport::Channel;
 
 /// Handles all client-side commands.
@@ -7,7 +7,6 @@ pub async fn handle_cli_command(
     node_addr: String,
     command: CliCommands,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    log::info!("Connecting to node at {}", node_addr);
     let mut client = PeerServiceClient::connect(node_addr).await?;
 
     match command {
@@ -31,14 +30,18 @@ pub async fn handle_cli_command(
             println!("FEATURE NOT IMPLEMENTED YET");
         }
         CliCommands::ListFiles => {
-            // TODO: Add a gRPC endpoint to list files known by a node.
-            println!("Listing files...");
-            println!("FEATURE NOT IMPLEMENTED YET");
+            let response = client.list_files(tonic::Request::new(crate::storage_proto::ListFilesRequest {})).await?.into_inner();
+            println!("Known files:");
+            for file in response.files {
+                println!("- Name: {}, Size: {}", file.name, file.size);
+            }
         }
         CliCommands::ListPeers => {
-            // TODO: Add a gRPC endpoint to list peers known by a node.
-            println!("Listing peers...");
-            println!("FEATURE NOT IMPLEMENTED YET");
+            let response = client.list_peers(tonic::Request::new(crate::storage_proto::ListPeersRequest {})).await?.into_inner();
+            println!("Known peers:");
+            for peer in response.peers {
+                println!("- {}", peer);
+            }
         }
     }
 

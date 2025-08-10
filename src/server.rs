@@ -25,9 +25,8 @@ impl PeerService for PeerServer {
         let from_address = remote_request.from_address;
         log::info!("Received SharePeers request from {}", from_address);
 
-        // TODO: Add the requesting peer and their peers to our list.
-        // self.node.add_peers(remote_request.known_peers).await;
-        // self.node.add_peer(from_address).await;
+        self.node.add_peers(remote_request.known_peers).await;
+        self.node.add_peer(from_address).await;
 
         let known_peers = self.node.get_peers().await;
         let response = PeerResponse { known_peers };
@@ -45,10 +44,8 @@ impl PeerService for PeerServer {
             message.file_hashes.len()
         );
 
-        // TODO: Process the received file hashes.
-        // For any hash we don't know about, we should request its metadata
-        // from the gossiping peer.
-        // self.node.handle_gossip(message.file_hashes).await;
+        let hashes = message.file_hashes;
+        self.node.handle_gossip(hashes).await;
 
         Ok(Response::new(GossipResponse { success: true }))
     }
@@ -79,8 +76,16 @@ impl PeerService for PeerServer {
             hex::encode(&file_hash)
         );
 
-        // TODO: Implement the logic in node.rs
-        todo!();
+        match self.node.get_metadata(&file_hash).await {
+            Ok(Some(metadata)) => {
+                let serialized_metadata = bincode::serialize(&metadata).unwrap();
+                Ok(Response::new(GetFileMetadataResponse {
+                    metadata: serialized_metadata,
+                }))
+            }
+            Ok(None) => Err(Status::not_found("Metadata not found")),
+            Err(e) => Err(Status::internal(e.to_string())),
+        }
     }
 
     /// Stores a replica of a chunk sent from another peer.
@@ -103,6 +108,40 @@ impl PeerService for PeerServer {
             Err(e) => Err(Status::internal(e.to_string())),
         }
     }
+
+    async fn list_peers(
+        &self,
+        _request: Request<crate::storage_proto::ListPeersRequest>,
+    ) -> Result<Response<crate::storage_proto::ListPeersResponse>, Status> {
+        let peers = self.node.get_peers().await;
+        Ok(Response::new(crate::storage_proto::ListPeersResponse {
+            peers,
+        }))
+    }
+
+    async fn list_files(
+        &self,
+        _request: Request<crate::storage_proto::ListFilesRequest>,
+    ) -> Result<Response<crate::storage_proto::ListFilesResponse>, Status> {
+        let files = self.node.get_all_metadata().await.unwrap_or_default();
+        let mut proto_files = Vec::new();
+        for file in files {
+            proto_files.push(file.into());
+        }
+        Ok(Response::new(crate::storage_proto::ListFilesResponse {
+            files: proto_files,
+        }))
+    }
+}
+
+impl From<crate::storage::FileInfo> for crate::storage_proto::FileInfo {
+    fn from(file_info: crate::storage::FileInfo) -> Self {
+        crate::storage_proto::FileInfo {
+            name: file_info.name,
+            size: file_info.size,
+            chunk_hashes: file_info.chunk_hashes,
+        }
+    }
 }
 
 /// Initializes and runs the gRPC server.
@@ -112,7 +151,10 @@ pub async fn start_server(
     db_path: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("[::1]:{}", port).parse()?;
-    let node = Arc::new(Node::new(&db_path.to_string_lossy())?);
+    let node = Arc::new(Node::new(
+        &db_path.to_string_lossy(),
+        format!("[::1]:{}", port),
+    )?);
 
     let peer_server = PeerServer { node: node.clone() };
 

@@ -19,6 +19,12 @@ service PeerService {
 
   // Instructs a peer to store a replica of a chunk.
   rpc StoreChunk(StoreChunkRequest) returns (StoreChunkResponse);
+
+  // Asks a peer for a list of its known peers.
+  rpc ListPeers(ListPeersRequest) returns (ListPeersResponse);
+
+  // Asks a peer for a list of its known files.
+  rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
 }
 
 // === Peer Discovery Messages ===
@@ -39,7 +45,7 @@ message PeerResponse {
 
 message GossipMessage {
   // A list of file hashes the sender knows about.
-  repeated string file_hashes = 1;
+  repeated bytes file_hashes = 1;
 }
 
 message GossipResponse {
@@ -66,3 +72,25 @@ message StoreChunkRequest {
 }
 
 message StoreChunkResponse { bool success = 1; }
+
+// === Peer Listing Messages ===
+
+message ListPeersRequest {}
+
+message ListPeersResponse {
+  repeated string peers = 1;
+}
+
+// === File Listing Messages ===
+
+message FileInfo {
+  string name = 1;
+  uint64 size = 2;
+  repeated bytes chunk_hashes = 3;
+}
+
+message ListFilesRequest {}
+
+message ListFilesResponse {
+  repeated FileInfo files = 1;
+}
