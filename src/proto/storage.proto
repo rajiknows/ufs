@@ -1,4 +1,3 @@
-
 syntax = "proto3";
 
 package storage;
@@ -25,9 +24,14 @@ service PeerService {
 
   // Asks a peer for a list of its known files.
   rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
+
+  // Initiates a file upload.
+  rpc InitiateUpload(InitiateUploadRequest) returns (InitiateUploadResponse);
+
+  // Uploads a chunk of a file.
+  rpc UploadChunk(UploadChunkRequest) returns (UploadChunkResponse);
 }
 
-// === Peer Discovery Messages ===
 
 message PeerRequest {
   // The list of peers known to the requesting node.
@@ -41,7 +45,6 @@ message PeerResponse {
   repeated string known_peers = 1;
 }
 
-// === Gossip Messages ===
 
 message GossipMessage {
   // A list of file hashes the sender knows about.
@@ -53,7 +56,6 @@ message GossipResponse {
   bool success = 1;
 }
 
-// === File & Chunk Transfer Messages ===
 
 message GetChunkRequest { bytes chunk_hash = 1; }
 
@@ -73,7 +75,25 @@ message StoreChunkRequest {
 
 message StoreChunkResponse { bool success = 1; }
 
-// === Peer Listing Messages ===
+message InitiateUploadRequest {
+  bytes file_hash = 1;
+  FileInfo metadata = 2;
+}
+
+message InitiateUploadResponse {
+  bool success = 1;
+}
+
+message UploadChunkRequest {
+  bytes chunk_hash = 1;
+  bytes chunk_data = 2;
+}
+
+message UploadChunkResponse {
+  bool success = 1;
+}
+
+
 
 message ListPeersRequest {}
 
@@ -81,7 +101,6 @@ message ListPeersResponse {
   repeated string peers = 1;
 }
 
-// === File Listing Messages ===
 
 message FileInfo {
   string name = 1;

@@ -6,6 +6,7 @@ mod gossip;
 mod node;
 mod server;
 mod storage;
+mod utils;
 
 // Build gRPC code from proto file
 pub mod storage_proto {

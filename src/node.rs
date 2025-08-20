@@ -108,7 +108,7 @@ impl Node {
                     log::warn!("No peers to request metadata from.");
                     continue;
                 }
-                let random_peer = peers[rand::random::<usize>() % peers.len()].clone();
+                let random_peer = peers[rand::random::<u32>() as usize % peers.len()].clone();
                 match self.request_metadata(&random_peer, &hash).await {
                     Ok(_) => log::info!("Successfully requested metadata"),
                     Err(e) => log::warn!("Failed to request metadata: {e}"),

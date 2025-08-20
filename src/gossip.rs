@@ -26,7 +26,7 @@ impl Gossip {
             }
 
             log::info!("Executing gossip tick...");
-            let random_peer = peers[rand::random::<usize>() % peers.len()].clone();
+            let random_peer = peers[rand::random::<u32>() as usize % peers.len()].clone();
             self.gossip_with_peer(&random_peer).await;
         }
     }
