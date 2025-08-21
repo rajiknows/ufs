@@ -1,11 +1,6 @@
-use std::{collections::HashMap, sync::Arc};
-
-use futures::lock::Mutex;
 use serde::{Deserialize, Serialize};
-use sled::{Db, Tree};
-
-const CHUNKS_TREE: &str = "chunks";
-const METADATA_TREE: &str = "metadata";
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 /// Represents the metadata for a single file.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -15,79 +10,60 @@ pub struct FileInfo {
     pub chunk_hashes: Vec<Vec<u8>>,
 }
 
-/// Manages the Sled database.
+/// Manages the in-memory storage.
+#[derive(Clone, Default)]
 pub struct Storage {
-    chunks: Tree,
-    metadata: Tree,
-}
-
-pub struct Dht {
-    pub chunk_table: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    chunks: Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>,
+    metadata: Arc<RwLock<HashMap<Vec<u8>, FileInfo>>>,
+    dht_values: Arc<RwLock<HashMap<Vec<u8>, String>>>,
 }
 
 impl Storage {
-    /// Opens the database at the given path.
-    pub fn new(path: &str) -> Result<Self, sled::Error> {
-        let db = sled::open(path)?;
-        let chunks = db.open_tree(CHUNKS_TREE)?;
-        let metadata = db.open_tree(METADATA_TREE)?;
-        Ok(Storage { chunks, metadata })
+    /// Creates a new in-memory storage.
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Stores a raw data chunk, keyed by its SHA256 hash.
-    pub fn store_chunk(&self, hash: &[u8], data: &[u8]) -> Result<(), sled::Error> {
-        self.chunks.insert(hash, data)?;
-        Ok(())
+    pub fn store_chunk(&self, hash: &[u8], data: &[u8]) {
+        self.chunks
+            .write()
+            .unwrap()
+            .insert(hash.to_vec(), data.to_vec());
     }
 
     /// Retrieves a chunk by its hash.
-    pub fn get_chunk(&self, hash: &[u8]) -> Result<Option<Vec<u8>>, sled::Error> {
-        self.chunks.get(hash).map(|opt| opt.map(|v| v.to_vec()))
+    pub fn get_chunk(&self, hash: &[u8]) -> Option<Vec<u8>> {
+        self.chunks.read().unwrap().get(hash).cloned()
     }
 
-    /// Stores serialized file metadata, keyed by its hash.
-    pub fn store_metadata(
-        &self,
-        hash: &[u8],
-        metadata: &FileInfo,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let serialized = bincode::serialize(metadata)?;
-        self.metadata.insert(hash, serialized)?;
-        Ok(())
+    /// Stores file metadata, keyed by its hash.
+    pub fn store_metadata(&self, hash: &[u8], metadata: &FileInfo) {
+        self.metadata
+            .write()
+            .unwrap()
+            .insert(hash.to_vec(), metadata.clone());
     }
 
-    /// Retrieves and deserializes file metadata by its hash.
-    pub fn get_metadata(
-        &self,
-        hash: &[u8],
-    ) -> Result<Option<FileInfo>, Box<dyn std::error::Error>> {
-        match self.metadata.get(hash)? {
-            Some(data) => {
-                let metadata: FileInfo = bincode::deserialize(&data)?;
-                Ok(Some(metadata))
-            }
-            None => Ok(None),
-        }
-    }
-
-    /// Retrieves all chunk hashes from the database.
-    pub fn get_all_chunk_hashes(&self) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
-        let mut hashes = Vec::new();
-        for key in self.chunks.iter().keys() {
-            hashes.push(key?.to_vec());
-        }
-        Ok(hashes)
+    /// Retrieves file metadata by its hash.
+    pub fn get_metadata(&self, hash: &[u8]) -> Option<FileInfo> {
+        self.metadata.read().unwrap().get(hash).cloned()
     }
 
     /// Retrieves all file metadata from the database.
-    pub fn get_all_metadata(&self) -> Result<Vec<FileInfo>, Box<dyn std::error::Error>> {
-        let mut metadata = Vec::new();
-        for item in self.metadata.iter() {
-            let (_, value) = item?;
-            let file_info: FileInfo = bincode::deserialize(&value)?;
-            metadata.push(file_info);
-        }
-        Ok(metadata)
+    pub fn get_all_metadata(&self) -> Vec<FileInfo> {
+        self.metadata.read().unwrap().values().cloned().collect()
+    }
+
+    // New methods for DHT values
+    pub fn store_value(&self, key: &[u8], value: &str) {
+        self.dht_values
+            .write()
+            .unwrap()
+            .insert(key.to_vec(), value.to_string());
+    }
+
+    pub fn get_value(&self, key: &[u8]) -> Option<String> {
+        self.dht_values.read().unwrap().get(key).cloned()
     }
 }
-

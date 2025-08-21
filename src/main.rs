@@ -2,11 +2,12 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 mod cli;
-mod gossip;
+mod utils;
+mod dht;
+
 mod node;
 mod server;
 mod storage;
-mod utils;
 
 // Build gRPC code from proto file
 pub mod storage_proto {
@@ -36,18 +37,12 @@ struct ServerArgs {
     /// An optional peer to bootstrap this node's peer list from.
     #[arg(long)]
     bootstrap_peer: Option<String>,
-    /// Path to the database directory.
-    #[arg(long, default_value = "./db")]
-    db_path: PathBuf,
 }
 
 #[derive(Parser, Debug)]
 struct CliArgs {
     /// The address of the node to connect to.
-    #[arg(
-        long,
-        default_value = "http://127.0.0.1:50051"
-    )]
+    #[arg(long, default_value = "http://127.0.0.1:50051")]
     node_addr: String,
     #[command(subcommand)]
     command: CliCommands,
@@ -82,12 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match args.command {
         Commands::Server(server_args) => {
-            server::start_server(
-                server_args.port,
-                server_args.bootstrap_peer,
-                server_args.db_path,
-            )
-            .await?;
+            server::start_server(server_args.port, server_args.bootstrap_peer).await?;
         }
         Commands::Cli(cli_args) => {
             cli::handle_cli_command(cli_args.node_addr, cli_args.command).await?;
