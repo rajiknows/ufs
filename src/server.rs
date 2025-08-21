@@ -3,7 +3,8 @@ use crate::storage_proto::{
     peer_service_server::{PeerService, PeerServiceServer},
     GetChunkRequest, GetChunkResponse, GetFileMetadataRequest, GetFileMetadataResponse,
     GossipMessage, GossipResponse, PeerRequest, PeerResponse, StoreChunkRequest,
-    StoreChunkResponse,
+    StoreChunkResponse, InitiateUploadRequest, InitiateUploadResponse, UploadChunkRequest,
+    UploadChunkResponse,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -131,6 +132,52 @@ impl PeerService for PeerServer {
         Ok(Response::new(crate::storage_proto::ListFilesResponse {
             files: proto_files,
         }))
+    }
+
+    async fn initiate_upload(
+        &self,
+        request: Request<InitiateUploadRequest>,
+    ) -> Result<Response<InitiateUploadResponse>, Status> {
+        let req = request.into_inner();
+        log::info!(
+            "Received request to initiate upload for file {}",
+            hex::encode(&req.file_hash)
+        );
+
+        let metadata = req.metadata.unwrap();
+
+        match self
+            .node
+            .store_metadata(&req.file_hash, &crate::storage::FileInfo {
+                name: metadata.name,
+                size: metadata.size,
+                chunk_hashes: metadata.chunk_hashes,
+            })
+            .await
+        {
+            Ok(_) => Ok(Response::new(InitiateUploadResponse { success: true })),
+            Err(e) => Err(Status::internal(e.to_string())),
+        }
+    }
+
+    async fn upload_chunk(
+        &self,
+        request: Request<UploadChunkRequest>,
+    ) -> Result<Response<UploadChunkResponse>, Status> {
+        let req = request.into_inner();
+        log::info!(
+            "Received request to upload chunk {}",
+            hex::encode(&req.chunk_hash)
+        );
+
+        match self
+            .node
+            .store_chunk(&req.chunk_hash, &req.chunk_data)
+            .await
+        {
+            Ok(_) => Ok(Response::new(UploadChunkResponse { success: true })),
+            Err(e) => Err(Status::internal(e.to_string())),
+        }
     }
 }
 

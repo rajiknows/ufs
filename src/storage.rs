@@ -1,5 +1,7 @@
+use std::{collections::HashMap, sync::Arc};
+
+use futures::lock::Mutex;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use sled::{Db, Tree};
 
 const CHUNKS_TREE: &str = "chunks";
@@ -15,9 +17,12 @@ pub struct FileInfo {
 
 /// Manages the Sled database.
 pub struct Storage {
-    db: Db,
     chunks: Tree,
     metadata: Tree,
+}
+
+pub struct Dht {
+    pub chunk_table: Arc<Mutex<HashMap<String, Vec<u8>>>>,
 }
 
 impl Storage {
@@ -26,7 +31,7 @@ impl Storage {
         let db = sled::open(path)?;
         let chunks = db.open_tree(CHUNKS_TREE)?;
         let metadata = db.open_tree(METADATA_TREE)?;
-        Ok(Storage { db, chunks, metadata })
+        Ok(Storage { chunks, metadata })
     }
 
     /// Stores a raw data chunk, keyed by its SHA256 hash.
@@ -86,9 +91,3 @@ impl Storage {
     }
 }
 
-/// Computes the SHA256 hash of a byte slice.
-pub fn hash(data: &[u8]) -> Vec<u8> {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    hasher.finalize().to_vec()
-}

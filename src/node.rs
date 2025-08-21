@@ -1,5 +1,5 @@
 use crate::gossip::Gossip;
-use crate::storage::Storage;
+use crate::storage::{FileInfo, Storage};
 use crate::storage_proto::peer_service_client::PeerServiceClient;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -33,6 +33,7 @@ impl Node {
         if let Some(addr) = bootstrap_peer {
             self.bootstrap(addr).await?;
         }
+        // start the gossip in sub-thread
         let gossip_clone = self.gossip.clone();
         tokio::spawn(async move {
             gossip_clone.start().await;
@@ -43,6 +44,7 @@ impl Node {
     async fn bootstrap(&self, addr: String) -> Result<(), Box<dyn std::error::Error>> {
         log::info!("Bootstrapping with peer at {}", addr);
         let mut client = PeerServiceClient::connect(addr).await?;
+        // share the known peers to the network
         let response = client
             .share_peers(tonic::Request::new(crate::storage_proto::PeerRequest {
                 known_peers: self.get_peers().await,
@@ -78,6 +80,14 @@ impl Node {
 
     pub async fn get_chunk(&self, hash: &[u8]) -> Result<Option<Vec<u8>>, sled::Error> {
         self.storage.get_chunk(hash)
+    }
+
+    pub async fn store_metadata(
+        &self,
+        hash: &[u8],
+        metadata: &FileInfo,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.storage.store_metadata(hash, metadata)
     }
 
     pub async fn get_metadata(

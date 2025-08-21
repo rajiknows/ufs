@@ -1,11 +1,13 @@
-use std::fs::File;
-use std::io::{BufReader, Read};
-
 use crate::storage_proto::peer_service_client::PeerServiceClient;
+use crate::storage_proto::{
+    FileInfo, GetChunkRequest, GetFileMetadataRequest, InitiateUploadRequest, UploadChunkRequest,
+};
+use crate::utils::hash;
 use crate::CliCommands;
-use sha2::digest::crypto_common::KeyInit;
-use sha2::Sha256;
-use tonic::transport::Channel;
+use std::fs;
+use std::io::Write;
+use std::path::PathBuf;
+use tonic::Request;
 
 /// Handles all client-side commands.
 pub async fn handle_cli_command(
@@ -16,45 +18,12 @@ pub async fn handle_cli_command(
 
     match command {
         CliCommands::Upload { path } => {
-            // TODO: Implement file upload logic.
-            // 1. Read the file from `path`.
-            // 2. Chunk the file.
-            // 3. Hash each chunk and the file metadata.
-            // 4. Tell the connected node to store the file.
-            //    This will involve new gRPC calls, e.g., `InitiateUpload`.
-            let file = File::open(&path).expect("File path invalid");
-            let mut reader = BufReader::new(file);
-
-            let mut buffer = [0u8; 1024];
-            let mut chunk_idx = 0usize;
-            let mut file_hasher = Sha256::new();
-
-            while let Ok(n) = reader.read(&mut buffer) {
-                if n == 0 {
-                    break;
-                }
-                let mut chunk_hasher = Sha256::new();
-                chunk_hasher.update(&buffer[..n]);
-                let chunk_hash = chunk_hasher.finalize();
-
-                file_hasher.update(&buffer[..n]);
-
-                println!("Chunk {} ({} bytes), hash: {:x}", chunk_idx, n, chunk_hash);
-                chunk_idx += 1;
-            }
-
-            let file_hash = file_hasher.finalize();
-            println!("Uploading file from path: {:?}", path);
-            println!("FEATURE NOT IMPLEMENTED YET");
+            let file_hash = upload_file(&mut client, path).await?;
+            println!("File uploaded successfully. Hash: {}", file_hash);
         }
         CliCommands::Download { hash, output } => {
-            // TODO: Implement file download logic.
-            // 1. Ask the node for the file's metadata using the hash.
-            // 2. From the metadata, get the list of chunk hashes.
-            // 3. For each chunk hash, request the chunk data from the network.
-            // 4. Reassemble the chunks and write to the `output` path.
-            println!("Downloading file with hash `{}` to `{:?}`", hash, output);
-            println!("FEATURE NOT IMPLEMENTED YET");
+            download_file(&mut client, &hash, output).await?;
+            println!("File downloaded successfully.");
         }
         CliCommands::ListFiles => {
             let response = client
@@ -80,6 +49,68 @@ pub async fn handle_cli_command(
                 println!("- {}", peer);
             }
         }
+    }
+
+    Ok(())
+}
+
+async fn upload_file(
+    client: &mut PeerServiceClient<tonic::transport::Channel>,
+    path: PathBuf,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let data = fs::read(&path)?;
+    let chunk_size = 1024 * 256;
+    let chunks: Vec<Vec<u8>> = data.chunks(chunk_size).map(|c| c.to_vec()).collect();
+    let chunk_hashes: Vec<Vec<u8>> = chunks.iter().map(|c| hash(c)).collect();
+    let metadata = FileInfo {
+        name: path.file_name().unwrap().to_string_lossy().into(),
+        size: data.len() as u64,
+        chunk_hashes: chunk_hashes.clone(),
+    };
+    let file_hash = hash(&bincode::serialize(&metadata)?);
+
+    client
+        .initiate_upload(Request::new(InitiateUploadRequest {
+            file_hash: file_hash.clone(),
+            metadata: Some(metadata),
+        }))
+        .await?;
+
+    for (chunk, hash) in chunks.iter().zip(chunk_hashes.iter()) {
+        client
+            .upload_chunk(Request::new(UploadChunkRequest {
+                chunk_hash: hash.clone(),
+                chunk_data: chunk.clone(),
+            }))
+            .await?;
+    }
+    Ok(hex::encode(file_hash))
+}
+
+async fn download_file(
+    client: &mut PeerServiceClient<tonic::transport::Channel>,
+    hash: &str,
+    output: PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let file_hash = hex::decode(hash)?;
+
+    let metadata_response = client
+        .get_file_metadata(Request::new(GetFileMetadataRequest {
+            file_hash: file_hash.clone(),
+        }))
+        .await?
+        .into_inner();
+
+    let metadata: FileInfo = bincode::deserialize(&metadata_response.metadata)?;
+
+    let mut file = fs::File::create(output)?;
+
+    for chunk_hash in metadata.chunk_hashes {
+        let chunk_response = client
+            .get_chunk(Request::new(GetChunkRequest { chunk_hash }))
+            .await?
+            .into_inner();
+        file.write_all(&chunk_response.chunk_data)?;
     }
 
     Ok(())
