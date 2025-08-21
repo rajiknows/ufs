@@ -11,7 +11,9 @@ use tonic::Request;
 
 #[derive(Clone)]
 pub struct Node {
+    // the kademlia id
     pub id: [u8; 32],
+    // node address
     pub address: String,
     pub storage: Arc<Storage>,
     pub routing_table: Arc<Mutex<RoutingTable>>,
@@ -61,7 +63,7 @@ impl Node {
             address: addr.to_string(),
         };
 
-        self.routing_table.lock().await.add_peer(bootstrap_peer);
+        self.routing_table.lock().await.add_peer(bootstrap_peer).await;
 
         // Perform a FIND_NODE on ourself to discover the network
         self.perform_find_node(&self.id).await?;
@@ -142,6 +144,12 @@ impl Node {
         Ok(results.into_iter().take(K_VALUE).collect())
     }
 
+    /// Perform a find_value operation on the DHT.
+    /// this is how this works:
+    /// 1. Find the closest peers to the target ID.
+    /// 2. Query those peers for their closest peers to the target ID.
+    /// 3. Repeat until we have got the value or we've queried all peers.
+
     pub async fn perform_find_value(
         &self,
         key: &[u8; 32],
@@ -150,6 +158,7 @@ impl Node {
         let mut queried_peers = HashSet::new();
 
         loop {
+            // store the futures of each request to the closest peers
             let mut futures = Vec::new();
             let peers_to_query: Vec<Peer> = closest_peers
                 .iter()

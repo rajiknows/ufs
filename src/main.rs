@@ -2,14 +2,13 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 mod cli;
-mod utils;
 mod dht;
+mod utils;
 
 mod node;
 mod server;
 mod storage;
 
-// Build gRPC code from proto file
 pub mod storage_proto {
     tonic::include_proto!("storage");
 }
@@ -23,26 +22,21 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Run the P2P node server
     Server(ServerArgs),
-    /// Interact with a P2P node via the CLI
     Cli(CliArgs),
 }
 
 #[derive(Parser, Debug)]
 struct ServerArgs {
-    /// Port to listen on for gRPC connections.
-    #[arg(long, default_value_t = 50051)]
+    #[arg(long, default_value_t = 42069)]
     port: u16,
-    /// An optional peer to bootstrap this node's peer list from.
     #[arg(long)]
     bootstrap_peer: Option<String>,
 }
 
 #[derive(Parser, Debug)]
 struct CliArgs {
-    /// The address of the node to connect to.
-    #[arg(long, default_value = "http://127.0.0.1:50051")]
+    #[arg(long, default_value = "http://127.0.0.1:42069")]
     node_addr: String,
     #[command(subcommand)]
     command: CliCommands,
@@ -50,27 +44,22 @@ struct CliArgs {
 
 #[derive(Subcommand, Debug)]
 enum CliCommands {
-    /// Upload a file to the network.
     Upload {
         #[arg(long)]
         path: PathBuf,
     },
-    /// Download a file from the network using its hash.
     Download {
         #[arg(long)]
         hash: String,
         #[arg(long)]
         output: PathBuf,
     },
-    /// List all files known to the connected node.
     ListFiles,
-    /// List all peers known to the connected node.
     ListPeers,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args = Args::parse();

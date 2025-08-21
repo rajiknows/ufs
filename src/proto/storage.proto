@@ -22,7 +22,7 @@ service PeerService {
   // Asks a peer for the metadata of a specific file.
   rpc GetFileMetadata(GetFileMetadataRequest) returns (GetFileMetadataResponse);
 
-  
+
 
   // Asks a peer for a list of its known peers.
   rpc ListPeers(ListPeersRequest) returns (ListPeersResponse);
@@ -37,7 +37,6 @@ service PeerService {
   rpc UploadChunk(UploadChunkRequest) returns (UploadChunkResponse);
 }
 
-// Kademlia RPC Messages
 message PingRequest {
   PeerMessage peer = 1;
 }
@@ -48,7 +47,7 @@ message PongResponse {
 
 message StoreRequest {
   bytes key = 1;
-  string value = 2; // Can be a serialized struct or any string data
+  string value = 2;
 }
 
 message StoreResponse {
@@ -82,7 +81,6 @@ message GetChunkResponse { bytes chunk_data = 1; }
 message GetFileMetadataRequest { bytes file_hash = 1; }
 
 message GetFileMetadataResponse {
-  // Will contain the serialized FileInfo struct.
   bytes metadata = 1;
 }
 

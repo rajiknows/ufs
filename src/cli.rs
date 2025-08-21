@@ -1,16 +1,15 @@
-use crate::utils::hash;
 use crate::storage_proto::peer_service_client::PeerServiceClient;
 use crate::storage_proto::{
     FileInfo, GetChunkRequest, GetFileMetadataRequest, InitiateUploadRequest, StoreRequest,
     UploadChunkRequest,
 };
+use crate::utils::hash;
 use crate::CliCommands;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use tonic::Request;
 
-/// Handles all client-side commands.
 pub async fn handle_cli_command(
     node_addr: String,
     command: CliCommands,
@@ -57,25 +56,30 @@ async fn upload_file(node_addr: &str, path: PathBuf) -> Result<(), Box<dyn std::
     let mut client = PeerServiceClient::connect(node_addr.to_string()).await?;
 
     let data = fs::read(&path)?;
+    // 256kb chunks
     let chunk_size = 1024 * 256;
     let chunks: Vec<Vec<u8>> = data.chunks(chunk_size).map(|c| c.to_vec()).collect();
+    // hash the chunks
     let chunk_hashes: Vec<Vec<u8>> = chunks.iter().map(|c| hash(c)).collect();
+    // store the metadata
     let metadata = FileInfo {
         name: path.file_name().unwrap().to_string_lossy().into(),
         size: data.len() as u64,
         chunk_hashes: chunk_hashes.clone(),
     };
+    // we hash the entire metadata and store it as file hash
     let file_hash_vec = hash(&bincode::serialize(&metadata)?);
     let file_hash: [u8; 32] = file_hash_vec.as_slice().try_into().unwrap();
 
-    // 1. Store the file locally
+    // Store the file locally
     client
         .initiate_upload(Request::new(InitiateUploadRequest {
-            file_hash: file_hash.to_vec(),
+            file_hash: file_hash_vec,
             metadata: Some(metadata),
         }))
         .await?;
 
+    // store the chunks locally
     for (chunk, hash) in chunks.iter().zip(chunk_hashes.iter()) {
         client
             .upload_chunk(Request::new(UploadChunkRequest {
@@ -87,7 +91,7 @@ async fn upload_file(node_addr: &str, path: PathBuf) -> Result<(), Box<dyn std::
 
     println!("File uploaded locally. Hash: {}", hex::encode(file_hash));
 
-    // 2. Find k-closest nodes to the file hash
+    // Find k-closest nodes to the file hash
     let mut find_client = PeerServiceClient::connect(node_addr.to_string()).await?;
     let find_node_response = find_client
         .find_node(Request::new(crate::storage_proto::FindNodeRequest {
@@ -101,14 +105,15 @@ async fn upload_file(node_addr: &str, path: PathBuf) -> Result<(), Box<dyn std::
         closest_peers.len()
     );
 
-    // 3. Send a Store RPC to each of the k-closest nodes
+    // Send a Store Request to each of the k-closest nodes
+    // telling them that we have the file
     for peer in closest_peers {
         println!("Announcing file to peer at {}", peer.address);
         let mut store_client = PeerServiceClient::connect(peer.address).await?;
         store_client
             .store(Request::new(StoreRequest {
                 key: file_hash.to_vec(),
-                value: node_addr.to_string(), // Announce that we have the file
+                value: node_addr.to_string(),
             }))
             .await?;
     }
@@ -124,7 +129,7 @@ async fn download_file(
     let file_hash_vec = hex::decode(hash_str)?;
     let file_hash: [u8; 32] = file_hash_vec.as_slice().try_into().unwrap();
 
-    // 1. Find the value (provider address) for the file hash
+    // find the value (provider address) for the file hash
     let mut client = PeerServiceClient::connect(node_addr.to_string()).await?;
     let find_value_response = client
         .find_value(Request::new(crate::storage_proto::FindValueRequest {
@@ -137,7 +142,7 @@ async fn download_file(
     if let Some(crate::storage_proto::find_value_response::Result::Value(provider_addr)) = result {
         println!("File provider found at: {}", provider_addr);
 
-        // 2. Connect to the provider and download the file
+        // now connect to the provider and download the file
         let mut provider_client = PeerServiceClient::connect(provider_addr).await?;
 
         let metadata_response = provider_client

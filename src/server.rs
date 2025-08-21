@@ -22,7 +22,8 @@ impl PeerService for PeerServer {
             node_id: remote_peer.node_id.try_into().unwrap(),
             address: remote_peer.address,
         };
-        self.node.routing_table.lock().await.add_peer(peer);
+        let node = self.node.clone();
+        node.routing_table.lock().await.add_peer(peer).await;
         let response = PongResponse {
             node_id: self.node.id.to_vec(),
         };
@@ -218,13 +219,12 @@ impl From<Peer> for PeerMessage {
     }
 }
 
-/// Initializes and runs the gRPC server.
 pub async fn start_server(
     port: u16,
     bootstrap_peer: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let addr = format!("[::1]:{}", port).parse()?;
-    let node_addr = format!("http://[::1]:{}", port);
+    let addr = format!("0.0.0.0:{}", port).parse()?;
+    let node_addr = format!("http://0.0.0.0:{}", port);
     let node = Arc::new(Node::new(&node_addr)?);
 
     let peer_server = PeerServer { node: node.clone() };

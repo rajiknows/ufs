@@ -1,5 +1,18 @@
+use crate::storage_proto::{peer_service_client::PeerServiceClient, PeerMessage, PingRequest};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+
+pub async fn ping_peer(peer: Peer) -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = PeerServiceClient::connect(peer.address.clone()).await?;
+    let request = tonic::Request::new(PingRequest {
+        peer: Some(PeerMessage {
+            node_id: peer.node_id.to_vec(),
+            address: peer.address,
+        }),
+    });
+    client.ping(request).await?;
+    Ok(())
+}
 
 pub const K_VALUE: usize = 20;
 
@@ -22,7 +35,8 @@ impl RoutingTable {
         }
     }
 
-    pub fn add_peer(&mut self, peer: Peer) {
+    pub async fn add_peer(&mut self, peer: Peer) {
+        //  check if this is own node_id , lol
         if self.local_node_id == peer.node_id {
             return;
         }
@@ -37,8 +51,17 @@ impl RoutingTable {
         } else if bucket.len() < K_VALUE {
             bucket.push_front(peer);
         } else {
-            // Here you might ping the last peer in the bucket to see if it's still alive
-            // For now, we'll just ignore the new peer if the bucket is full
+            if let Some(last_peer) = bucket.pop_front() {
+                match ping_peer(last_peer).await {
+                    Ok(_) => {
+                        println!("the bucket is full");
+                    }
+                    Err(_) => {
+                        println!("adding new peer");
+                        bucket.push_front(peer);
+                    }
+                }
+            }
         }
     }
 
@@ -51,7 +74,11 @@ impl RoutingTable {
             .collect();
 
         peers.sort_by_key(|(dist, _)| *dist);
-        peers.into_iter().take(K_VALUE).map(|(_, peer)| peer).collect()
+        peers
+            .into_iter()
+            .take(K_VALUE)
+            .map(|(_, peer)| peer)
+            .collect()
     }
 
     fn bucket_index(&self, node_id: &[u8; 32]) -> usize {
@@ -59,7 +86,7 @@ impl RoutingTable {
         if distance == 0 {
             return 0;
         }
-        // log2(distance)
+        // log2 distance ( typical kademelia style )
         255 - distance.leading_zeros() as usize
     }
 }
