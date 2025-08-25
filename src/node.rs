@@ -63,15 +63,19 @@ impl Node {
             address: addr.to_string(),
         };
 
-        self.routing_table.lock().await.add_peer(bootstrap_peer).await;
+        self.routing_table
+            .lock()
+            .await
+            .add_peer(bootstrap_peer)
+            .await;
 
-        // Perform a FIND_NODE on ourself to discover the network
-        self.perform_find_node(&self.id).await?;
+        // do a FIND_NODE on ourself to discover the network
+        self.find_node(&self.id).await?;
 
         Ok(())
     }
 
-    pub async fn perform_find_node(
+    pub async fn find_node(
         &self,
         target_id: &[u8; 32],
     ) -> Result<Vec<Peer>, Box<dyn std::error::Error>> {
@@ -150,7 +154,7 @@ impl Node {
     /// 2. Query those peers for their closest peers to the target ID.
     /// 3. Repeat until we have got the value or we've queried all peers.
 
-    pub async fn perform_find_value(
+    pub async fn find_value(
         &self,
         key: &[u8; 32],
     ) -> Result<Option<String>, Box<dyn std::error::Error>> {

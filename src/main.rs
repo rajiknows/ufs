@@ -56,6 +56,7 @@ enum CliCommands {
     },
     ListFiles,
     ListPeers,
+    ShowChunks,
 }
 
 #[tokio::main]

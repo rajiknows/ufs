@@ -10,7 +10,6 @@ pub struct FileInfo {
     pub chunk_hashes: Vec<Vec<u8>>,
 }
 
-/// Manages the in-memory storage.
 #[derive(Clone, Default)]
 pub struct Storage {
     chunks: Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>,
@@ -24,7 +23,7 @@ impl Storage {
         Self::default()
     }
 
-    /// Stores a raw data chunk, keyed by its SHA256 hash.
+    // stores a raw data chunk, keyed by its SHA256 hash.
     pub fn store_chunk(&self, hash: &[u8], data: &[u8]) {
         self.chunks
             .write()
@@ -32,12 +31,10 @@ impl Storage {
             .insert(hash.to_vec(), data.to_vec());
     }
 
-    /// Retrieves a chunk by its hash.
     pub fn get_chunk(&self, hash: &[u8]) -> Option<Vec<u8>> {
         self.chunks.read().unwrap().get(hash).cloned()
     }
 
-    /// Stores file metadata, keyed by its hash.
     pub fn store_metadata(&self, hash: &[u8], metadata: &FileInfo) {
         self.metadata
             .write()
@@ -45,17 +42,14 @@ impl Storage {
             .insert(hash.to_vec(), metadata.clone());
     }
 
-    /// Retrieves file metadata by its hash.
     pub fn get_metadata(&self, hash: &[u8]) -> Option<FileInfo> {
         self.metadata.read().unwrap().get(hash).cloned()
     }
 
-    /// Retrieves all file metadata from the database.
     pub fn get_all_metadata(&self) -> Vec<FileInfo> {
         self.metadata.read().unwrap().values().cloned().collect()
     }
 
-    // New methods for DHT values
     pub fn store_value(&self, key: &[u8], value: &str) {
         self.dht_values
             .write()

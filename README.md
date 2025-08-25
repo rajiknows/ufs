@@ -1,131 +1,128 @@
-# DFS Engine Documentation
+# UFS - Universal File Storage
 
-## Overview
-The DFS (Distributed File System) Engine is a peer-to-peer file sharing system implemented in Rust. It consists of a network node system for file distribution and a REST API server for client interactions.
+![Rust](https://img.shields.io/badge/rust-1.79.0-orange.svg)
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)
 
-## System Architecture
+A decentralized file storage system built with Rust, leveraging a Kademlia-based DHT for peer-to-peer file sharing.
 
-### Core Components
-1. **NetworkNode**: The main component handling peer-to-peer communications
-2. **FileSystem**: Manages file storage and retrieval
-3. **REST API Server**: Provides HTTP endpoints for client interactions
-4. **DHT (Distributed Hash Table)**: Tracks file locations across the network
+## Features
 
-## Workflow Descriptions
+- **Decentralized File Storage:** Store and retrieve files from a distributed network of nodes.
+- **Peer-to-Peer Networking:** Nodes communicate directly with each other to share files.
+- **Content-Addressable Storage:** Files are identified by the hash of their content, ensuring data integrity.
+- **Command-Line Interface:** Easy-to-use CLI for interacting with the network.
 
-### Network Node Operations
+## Table of Contents
 
-#### Node Startup Process
-1. Node initialization:
-   - Creates empty FileSystem
-   - Initializes empty peer list
-   - Sets up DHT
-   - Starts uptime counter
-2. Starts TCP listener for peer connections
-3. Begins handling incoming connections
+- [Architecture](#architecture)
+- [Getting Started](#getting-started)
+  - [Prerequisites](#prerequisites)
+  - [Building and Running](#building-and-running)
+- [Usage](#usage)
+  - [Server Mode](#server-mode)
+  - [CLI Mode](#cli-mode)
+- [Contributing](#contributing)
+- [License](#license)
 
-#### Peer Management
-1. **Adding Peers**
-   - New peer address is received
-   - Added to known_peers list
-   - Notifies existing peers about new peer
-   - Initiates file sync with new peer
+## Architecture
 
-2. **Peer Synchronization**
-   - Request peer's file list
-   - Compare with local files
-   - Exchange missing files
-   - Update DHT with new file locations
+The project is designed as a distributed file storage network. It consists of the following key components:
 
-### File Operations
+- **Nodes:** Each node in the network is a peer that can store and retrieve file chunks.
+- **Distributed Hash Table (DHT):** A Kademlia-based DHT is used to locate file chunks across the network.
+- **gRPC API:** Nodes communicate with each other using a gRPC API for actions like storing, retrieving, and replicating data.
+- **Command-Line Interface (CLI):** A `clap`-based CLI allows users to manage the node and interact with the network.
 
-#### File Upload Process
-1. Client sends file path to REST API
-2. Server reads file from path
-3. File is chunked and hashed
-4. File metadata is created and stored
-5. Chunks are distributed to network
-6. File hash is returned to client
+Data is serialized using Protocol Buffers for efficient storage and network transmission.
 
-#### File Download Process
-1. Client requests file by hash
-2. Server checks local storage for file
-3. If not found locally:
-   - Queries network peers
-   - Downloads chunks from available peers
-   - Reassembles file
-4. Returns file data to client
+**Logging:** [Tracing](https://github.com/tokio-rs/tracing)
 
-#### File Deletion
-1. Receives file hash
-2. Removes file metadata
-3. Removes associated chunks
-4. Broadcasts deletion to peers
+## Getting Started
 
-### REST API Endpoints
+### Prerequisites
 
-#### GET /files
-1. Retrieves list of files from local node
-2. Converts binary hashes to hex strings
-3. Returns file list with names and hashes
+- [Rust](https://www.rust-lang.org/tools/install) (latest stable version)
+- [Protocol Buffers Compiler](https://grpc.io/docs/protoc-installation/)
 
-#### POST /files
-1. Receives file path in request body
-2. Validates file existence
-3. Triggers file upload process
-4. Returns file hash
+### Building and Running
 
-#### GET /files/:hash
-1. Receives file hash parameter
-2. Converts hex hash to binary
-3. Initiates file download process
-4. Returns file data if found
+1. **Clone the repository:**
+   ```bash
+   git clone <repository-url>
+   cd ufs
+   ```
 
-#### GET /peers
-1. Retrieves list of known peers
-2. Formats peer addresses as strings
-3. Returns peer list
+2. **Build the project:**
+   ```bash
+   cargo build --release
+   ```
 
-#### POST /peers
-1. Receives peer address in request body
-2. Validates address format
-3. Initiates peer addition process
-4. Returns success/failure status
+3. **Run the node:**
+   ```bash
+   ./target/release/ufs
+   ```
 
-#### GET /uptime
-1. Retrieves node uptime counter
-2. Returns uptime in seconds
+## Usage
 
-### Message Types
-The system uses various message types for peer communication:
-- `GetFile`: Request file metadata
-- `GetChunk`: Request specific file chunk
-- `FileMetadata`: Share file information
-- `ChunkData`: Transfer file chunks
-- `ListFiles`: Request file listing
-- `FileList`: Share file listing
-- `AddPeer`: Notify about new peer
-- `SyncRequest/Response`: Synchronize file lists
-- `Ping/Pong`: Check peer availability
+The program has two main modes: `server` and `cli`.
 
-## Network Communication
-1. **TCP Connections**
-   - Used for all peer-to-peer communication
-   - Handles large data transfers (chunks)
-   - Maintains persistent connections when needed
+### Server Mode
 
-2. **Message Serialization**
-   - Uses bincode for efficient binary serialization
-   - Handles all message types uniformly
-   - Includes error handling for failed transfers
+Run a node on a given port:
 
-## State Management
-1. **Shared State**
-   - FileSystem state shared via Arc<Mutex>
-   - Peer list managed with concurrent access
-   - DHT updated across all operations
+```bash
+./target/release/ufs server --port 42069
+```
 
-2. **Synchronization**
-   - Uses Tokio for async operations
-   - Mutex locks for thread-safe state access
-   - Handles concurrent file operations
+Join an existing network by providing a bootstrap peer:
+
+```bash
+./target/release/ufs server --port 42070 --bootstrap-peer http://127.0.0.1:42069
+```
+
+### CLI Mode
+
+Interact with a running node:
+
+```bash
+./target/release/ufs cli --node-addr http://127.0.0.1:42069 <COMMAND>
+```
+
+**Upload a file:**
+
+```bash
+./target/release/ufs cli --node-addr http://127.0.0.1:42069 upload --path ./myfile.txt
+```
+
+**Download a file by hash:**
+
+```bash
+./target/release/ufs cli --node-addr http://127.0.0.1:42069 download --hash <file_hash> --output ./downloaded.txt
+```
+
+**List stored files:**
+
+```bash
+./target/release/ufs cli listfiles
+```
+
+**List connected peers:**
+
+```bash
+./target/release/ufs cli listpeers
+```
+
+**Show stored chunks:**
+
+```bash
+./target/release/ufs cli showchunks
+```
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a pull request or open an issue.
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
