@@ -47,6 +47,19 @@ pub async fn handle_cli_command(
                 println!("- {}", peer);
             }
         }
+        CliCommands::ShowChunks => {
+            let mut client = PeerServiceClient::connect(node_addr).await?;
+            let response = client
+                .show_chunks(tonic::Request::new(
+                    crate::storage_proto::ShowChunksRequest {},
+                ))
+                .await?
+                .into_inner();
+            println!("Chunks on local: ");
+            for chunk in response.chunks {
+                println!("- {}", hex::encode(chunk));
+            }
+        }
     }
 
     Ok(())

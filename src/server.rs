@@ -7,6 +7,7 @@ use crate::storage_proto::{
     InitiateUploadResponse, PeerMessage, PingRequest, PongResponse, StoreRequest, StoreResponse,
     UploadChunkRequest, UploadChunkResponse,
 };
+use crate::storage_proto::{ShowChunksRequest, ShowChunksResponse};
 use std::sync::Arc;
 use tonic::{transport::Server, Request, Response, Status};
 
@@ -197,6 +198,16 @@ impl PeerService for PeerServer {
 
         self.node.store_chunk(&req.chunk_hash, &req.chunk_data);
         Ok(Response::new(UploadChunkResponse { success: true }))
+    }
+
+    async fn show_chunks(
+        &self,
+        request: Request<ShowChunksRequest>,
+    ) -> Result<Response<ShowChunksResponse>, Status> {
+        let req = request.into_inner();
+        log::info!("Received request to show local chunks");
+        let chunks = self.node.storage.get_all_chunks();
+        Ok(Response::new(ShowChunksResponse { chunks: chunks }))
     }
 }
 

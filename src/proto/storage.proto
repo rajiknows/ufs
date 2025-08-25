@@ -35,6 +35,15 @@ service PeerService {
 
   // Uploads a chunk of a file.
   rpc UploadChunk(UploadChunkRequest) returns (UploadChunkResponse);
+
+  // Show chunks on local node
+  rpc ShowChunks(ShowChunksRequest) returns (ShowChunksResponse);
+}
+
+message ShowChunksRequest{};
+
+message ShowChunksResponse{
+  repeated bytes chunks =1;
 }
 
 message PingRequest {

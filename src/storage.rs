@@ -35,6 +35,10 @@ impl Storage {
         self.chunks.read().unwrap().get(hash).cloned()
     }
 
+    pub fn get_all_chunks(&self) -> Vec<Vec<u8>> {
+        self.chunks.read().unwrap().values().cloned().collect()
+    }
+
     pub fn store_metadata(&self, hash: &[u8], metadata: &FileInfo) {
         self.metadata
             .write()
