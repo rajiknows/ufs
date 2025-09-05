@@ -39,14 +39,16 @@ service PeerService {
   // Show chunks on local node
   rpc ShowChunks(ShowChunksRequest) returns (ShowChunksResponse);
   
-  rpc replicateChunks(replicateChunksRequest) returns (replicateChunksResponse);
+  rpc replicateChunks(stream replicateChunksRequest) returns (replicateChunksResponse);
 }
 
 /// this rpc will contains the data of the file and its metadata
 message replicateChunksRequest{
+  bytes node_id = 1;
+  string file_hash = 2;
   oneof payload{
-    FileInfo metadata =1;
-    bytes chunk_data =2;
+    FileInfo metadata =3;
+    bytes chunk_data =4;
   }
 }
 

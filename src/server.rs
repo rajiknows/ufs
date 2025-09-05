@@ -1,5 +1,6 @@
 use crate::dht::Peer;
 use crate::node::Node;
+use crate::storage_proto::replicate_chunks_request::Payload;
 use crate::storage_proto::{
     peer_service_server::{PeerService, PeerServiceServer},
     FindNodeRequest, FindNodeResponse, FindValueRequest, FindValueResponse, GetChunkRequest,
@@ -7,7 +8,11 @@ use crate::storage_proto::{
     InitiateUploadResponse, PeerMessage, PingRequest, PongResponse, StoreRequest, StoreResponse,
     UploadChunkRequest, UploadChunkResponse,
 };
-use crate::storage_proto::{ShowChunksRequest, ShowChunksResponse};
+use crate::storage_proto::{
+    FileInfo, ReplicateChunksRequest, ReplicateChunksResponse, ShowChunksRequest,
+    ShowChunksResponse,
+};
+use crate::utils;
 use std::sync::Arc;
 use tonic::{transport::Server, Request, Response, Status};
 
@@ -208,6 +213,66 @@ impl PeerService for PeerServer {
         log::info!("Received request to show local chunks");
         let chunks = self.node.storage.get_all_chunks();
         Ok(Response::new(ShowChunksResponse { chunks: chunks }))
+    }
+
+    async fn replicate_chunks(
+        &self,
+        request: Request<tonic::Streaming<ReplicateChunksRequest>>,
+    ) -> Result<Response<ReplicateChunksResponse>, Status> {
+        let mut stream = request.into_inner();
+        let mut file_metadata: Option<crate::storage::FileInfo> = None;
+        let mut total_size: u64 = 0;
+        let mut file_hash = Vec::new();
+
+        // The first message in the stream MUST be the metadata.
+        if let Some(req) = stream.message().await? {
+            if let Some(Payload::Metadata(metadata)) = req.payload {
+                file_hash = utils::hash(&bincode::serialize(&metadata).unwrap());
+                let storage_metadata: crate::storage::FileInfo = (&metadata).into();
+                self.node.store_metadata(&file_hash, &storage_metadata);
+                file_metadata = Some(storage_metadata);
+            } else {
+                return Err(Status::invalid_argument(
+                    "First message must contain metadata.",
+                ));
+            }
+        } else {
+            return Err(Status::invalid_argument("Stream is empty."));
+        }
+
+        // 2. Process the rest of the stream as file chunks.
+        while let Some(req) = stream.message().await? {
+            if let Some(Payload::ChunkData(chunk_data)) = req.payload {
+                let chunk_hash = crate::utils::hash(&chunk_data);
+
+                if let Some(ref metadata) = file_metadata {
+                    if !metadata.chunk_hashes.contains(&chunk_hash) {
+                        return Err(Status::invalid_argument(
+                            "Chunk hash does not belong to this file.",
+                        ));
+                    }
+                }
+
+                total_size += chunk_data.len() as u64;
+                self.node.store_chunk(&chunk_hash, &chunk_data);
+            }
+        }
+
+        // 3. Once the client closes the stream, send the final response.
+        Ok(Response::new(ReplicateChunksResponse {
+            file_hash: hex::encode(&file_hash),
+            size_replicated: total_size,
+        }))
+    }
+}
+
+impl From<&crate::storage_proto::FileInfo> for crate::storage::FileInfo {
+    fn from(file_info: &crate::storage_proto::FileInfo) -> Self {
+        crate::storage::FileInfo {
+            name: file_info.name.clone(),
+            size: file_info.size,
+            chunk_hashes: file_info.chunk_hashes.clone(),
+        }
     }
 }
 
