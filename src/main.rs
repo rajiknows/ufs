@@ -3,11 +3,10 @@ use std::path::PathBuf;
 
 mod cli;
 mod dht;
-mod utils;
-
 mod node;
 mod server;
 mod storage;
+mod utils;
 
 pub mod storage_proto {
     tonic::include_proto!("storage");

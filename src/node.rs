@@ -153,8 +153,7 @@ impl Node {
     /// 1. Find the closest peers to the target ID.
     /// 2. Query those peers for their closest peers to the target ID.
     /// 3. Repeat until we have got the value or we've queried all peers.
-
-    pub async fn find_value(
+    pub async fn _find_value(
         &self,
         key: &[u8; 32],
     ) -> Result<Option<String>, Box<dyn std::error::Error>> {

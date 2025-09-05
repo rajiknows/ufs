@@ -51,13 +51,14 @@ impl RoutingTable {
         } else if bucket.len() < K_VALUE {
             bucket.push_front(peer);
         } else {
-            if let Some(last_peer) = bucket.pop_front() {
-                match ping_peer(last_peer).await {
+            if let Some(last_peer) = bucket.back() {
+                match ping_peer(last_peer.clone()).await {
                     Ok(_) => {
-                        println!("the bucket is full");
+                        println!("the bucket is full, keeping existing peer");
                     }
                     Err(_) => {
-                        println!("adding new peer");
+                        println!("replacing inactive peer with new peer");
+                        bucket.pop_back();
                         bucket.push_front(peer);
                     }
                 }
@@ -66,6 +67,7 @@ impl RoutingTable {
     }
 
     pub fn find_closest_peers(&self, target_id: &[u8; 32]) -> Vec<Peer> {
+        // find xor distance and peer from the peer table
         let mut peers: Vec<(u128, Peer)> = self
             .buckets
             .iter()
@@ -73,7 +75,9 @@ impl RoutingTable {
             .map(|peer| (xor_distance(&peer.node_id, target_id), peer))
             .collect();
 
+        // sort by distance
         peers.sort_by_key(|(dist, _)| *dist);
+        // take the first k peers
         peers
             .into_iter()
             .take(K_VALUE)

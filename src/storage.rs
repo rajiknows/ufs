@@ -12,8 +12,11 @@ pub struct FileInfo {
 
 #[derive(Clone, Default)]
 pub struct Storage {
+    // store the chunkhash -> chunk
     chunks: Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>,
+    // stores the file_info
     metadata: Arc<RwLock<HashMap<Vec<u8>, FileInfo>>>,
+    // stores the chunkhash -> node addr
     dht_values: Arc<RwLock<HashMap<Vec<u8>, String>>>,
 }
 
