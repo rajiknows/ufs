@@ -223,6 +223,7 @@ impl PeerService for PeerServer {
         let mut file_metadata: Option<crate::storage::FileInfo> = None;
         let mut total_size: u64 = 0;
         let mut file_hash = Vec::new();
+        log::info!("Recieved request to replicate file");
 
         // The first message in the stream MUST be the metadata.
         if let Some(req) = stream.message().await? {
@@ -240,7 +241,12 @@ impl PeerService for PeerServer {
             return Err(Status::invalid_argument("Stream is empty."));
         }
 
-        // 2. Process the rest of the stream as file chunks.
+        log::info!(
+            "the file hash to be replicatedd is {:?}",
+            file_hash.to_ascii_lowercase()
+        );
+
+        // . Process the rest of the stream as file chunks.
         while let Some(req) = stream.message().await? {
             if let Some(Payload::ChunkData(chunk_data)) = req.payload {
                 let chunk_hash = crate::utils::hash(&chunk_data);
@@ -258,7 +264,7 @@ impl PeerService for PeerServer {
             }
         }
 
-        // 3. Once the client closes the stream, send the final response.
+        // Once the client closes the stream, send the final response.
         Ok(Response::new(ReplicateChunksResponse {
             file_hash: hex::encode(&file_hash),
             size_replicated: total_size,

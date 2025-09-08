@@ -15,14 +15,11 @@ service PeerService {
   rpc FindNode(FindNodeRequest) returns (FindNodeResponse);
   rpc FindValue(FindValueRequest) returns (FindValueResponse);
 
-
   // Asks a peer for a specific chunk of a file.
   rpc GetChunk(GetChunkRequest) returns (GetChunkResponse);
 
   // Asks a peer for the metadata of a specific file.
   rpc GetFileMetadata(GetFileMetadataRequest) returns (GetFileMetadataResponse);
-
-
 
   // Asks a peer for a list of its known peers.
   rpc ListPeers(ListPeersRequest) returns (ListPeersResponse);
@@ -38,29 +35,29 @@ service PeerService {
 
   // Show chunks on local node
   rpc ShowChunks(ShowChunksRequest) returns (ShowChunksResponse);
-  
-  rpc replicateChunks(stream replicateChunksRequest) returns (replicateChunksResponse);
+
+  rpc ReplicateChunks(stream ReplicateChunksRequest) returns (ReplicateChunksResponse);
 }
 
 /// this rpc will contains the data of the file and its metadata
-message replicateChunksRequest{
+message ReplicateChunksRequest {
   bytes node_id = 1;
-  string file_hash = 2;
-  oneof payload{
-    FileInfo metadata =3;
-    bytes chunk_data =4;
+  bytes file_hash = 2;
+  oneof payload {
+    FileInfo metadata = 3;
+    bytes chunk_data = 4;
   }
 }
 
-message replicateChunksResponse {
-  string file_hash =1;
-  uint64 size_replicated =2;
+message ReplicateChunksResponse {
+  string file_hash = 1;
+  uint64 size_replicated = 2;
 }
 
-message ShowChunksRequest{};
+message ShowChunksRequest {}
 
-message ShowChunksResponse{
-  repeated bytes chunks =1;
+message ShowChunksResponse {
+  repeated bytes chunks = 1;
 }
 
 message PingRequest {
@@ -99,11 +96,17 @@ message FindValueResponse {
   }
 }
 
-message GetChunkRequest { bytes chunk_hash = 1; }
+message GetChunkRequest {
+  bytes chunk_hash = 1;
+}
 
-message GetChunkResponse { bytes chunk_data = 1; }
+message GetChunkResponse {
+  bytes chunk_data = 1;
+}
 
-message GetFileMetadataRequest { bytes file_hash = 1; }
+message GetFileMetadataRequest {
+  bytes file_hash = 1;
+}
 
 message GetFileMetadataResponse {
   bytes metadata = 1;
@@ -114,7 +117,9 @@ message StoreChunkRequest {
   bytes chunk_data = 2;
 }
 
-message StoreChunkResponse { bool success = 1; }
+message StoreChunkResponse {
+  bool success = 1;
+}
 
 message InitiateUploadRequest {
   bytes file_hash = 1;

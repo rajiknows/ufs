@@ -1,14 +1,14 @@
 use crate::storage_proto::peer_service_client::PeerServiceClient;
 use crate::storage_proto::{
-    FileInfo, GetChunkRequest, GetFileMetadataRequest, InitiateUploadRequest, StoreRequest,
-    UploadChunkRequest,
+    replicate_chunks_request, FileInfo, GetChunkRequest, GetFileMetadataRequest,
+    InitiateUploadRequest, ReplicateChunksRequest, StoreRequest, UploadChunkRequest,
 };
 use crate::utils::hash;
-use crate::CliCommands;
+use crate::{node, CliCommands};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use tonic::Request;
+use tonic::{Request, Status};
 
 pub async fn handle_cli_command(
     node_addr: String,
@@ -65,34 +65,33 @@ pub async fn handle_cli_command(
     Ok(())
 }
 
+use futures::stream;
+
 async fn upload_file(node_addr: &str, path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let mut client = PeerServiceClient::connect(node_addr.to_string()).await?;
 
     let data = fs::read(&path)?;
-    // 256kb chunks
     let chunk_size = 1024 * 256;
     let chunks: Vec<Vec<u8>> = data.chunks(chunk_size).map(|c| c.to_vec()).collect();
-    // hash the chunks
+
     let chunk_hashes: Vec<Vec<u8>> = chunks.iter().map(|c| hash(c)).collect();
-    // store the metadata
+
     let metadata = FileInfo {
         name: path.file_name().unwrap().to_string_lossy().into(),
         size: data.len() as u64,
         chunk_hashes: chunk_hashes.clone(),
     };
-    // we hash the entire metadata and store it as file hash
+
     let file_hash_vec = hash(&bincode::serialize(&metadata)?);
     let file_hash: [u8; 32] = file_hash_vec.as_slice().try_into().unwrap();
 
-    // Store the file locally
     client
         .initiate_upload(Request::new(InitiateUploadRequest {
-            file_hash: file_hash_vec,
-            metadata: Some(metadata),
+            file_hash: file_hash_vec.clone(),
+            metadata: Some(metadata.clone()),
         }))
         .await?;
 
-    // store the chunks locally
     for (chunk, hash) in chunks.iter().zip(chunk_hashes.iter()) {
         client
             .upload_chunk(Request::new(UploadChunkRequest {
@@ -104,7 +103,6 @@ async fn upload_file(node_addr: &str, path: PathBuf) -> Result<(), Box<dyn std::
 
     println!("File uploaded locally. Hash: {}", hex::encode(file_hash));
 
-    // Find k-closest nodes to the file hash
     let mut find_client = PeerServiceClient::connect(node_addr.to_string()).await?;
     let find_node_response = find_client
         .find_node(Request::new(crate::storage_proto::FindNodeRequest {
@@ -113,23 +111,63 @@ async fn upload_file(node_addr: &str, path: PathBuf) -> Result<(), Box<dyn std::
         .await?;
 
     let closest_peers = find_node_response.into_inner().peers;
-    println!(
-        "Found {} closest peers to announce the file to.",
-        closest_peers.len()
-    );
 
-    // Send a Store Request to each of the k-closest nodes
-    // telling them that we have the file
     for peer in closest_peers {
         println!("Announcing file to peer at {}", peer.address);
-        let mut store_client = PeerServiceClient::connect(peer.address).await?;
+
+        // tell peer we have file
+        let mut store_client = PeerServiceClient::connect(peer.address.clone()).await?;
         store_client
             .store(Request::new(StoreRequest {
                 key: file_hash.to_vec(),
                 value: node_addr.to_string(),
             }))
             .await?;
+
+        // spawn replication
+        let metadata = metadata.clone();
+        let chunks = chunks.clone();
+        let file_hash_vec = file_hash_vec.clone();
+        let peer_addr = peer.address.clone();
+        let node_addr = node_addr.to_owned();
+
+        tokio::spawn(async move {
+            if let Err(e) = async {
+                log::info!("started the spawn ");
+                let mut client = PeerServiceClient::connect(peer_addr.clone()).await?;
+                log::info!("peer found and connected");
+
+                let mut requests = Vec::new();
+                requests.push(ReplicateChunksRequest {
+                    node_id: node_addr.as_bytes().to_vec(),
+                    file_hash: file_hash_vec.clone(),
+                    payload: Some(replicate_chunks_request::Payload::Metadata(metadata)),
+                });
+                for chunk in chunks {
+                    requests.push(ReplicateChunksRequest {
+                        node_id: node_addr.as_bytes().to_vec(),
+                        file_hash: file_hash_vec.clone(),
+                        payload: Some(replicate_chunks_request::Payload::ChunkData(chunk)),
+                    });
+                }
+
+                let stream = stream::iter(requests);
+                let resp = client.replicate_chunks(Request::new(stream)).await?;
+                log::info!(
+                    "replication response from {}: {:?}",
+                    peer_addr,
+                    resp.into_inner()
+                );
+                Ok::<_, Box<dyn std::error::Error>>(())
+            }
+            .await
+            {
+                log::error!("replication task failed: {:?}", e);
+            }
+        });
     }
+
+    log::info!("finished");
 
     Ok(())
 }
