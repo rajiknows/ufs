@@ -67,7 +67,7 @@ pub async fn handle_cli_command(
 
 use futures::stream;
 
-async fn upload_file(node_addr: &str, path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn upload_file(node_addr: &str, path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let mut client = PeerServiceClient::connect(node_addr.to_string()).await?;
 
     let data = fs::read(&path)?;
@@ -111,11 +111,11 @@ async fn upload_file(node_addr: &str, path: PathBuf) -> Result<(), Box<dyn std::
         .await?;
 
     let closest_peers = find_node_response.into_inner().peers;
+    let mut handles = Vec::new();
 
     for peer in closest_peers {
         println!("Announcing file to peer at {}", peer.address);
 
-        // tell peer we have file
         let mut store_client = PeerServiceClient::connect(peer.address.clone()).await?;
         store_client
             .store(Request::new(StoreRequest {
@@ -124,54 +124,67 @@ async fn upload_file(node_addr: &str, path: PathBuf) -> Result<(), Box<dyn std::
             }))
             .await?;
 
-        // spawn replication
         let metadata = metadata.clone();
         let chunks = chunks.clone();
         let file_hash_vec = file_hash_vec.clone();
         let peer_addr = peer.address.clone();
         let node_addr = node_addr.to_owned();
 
-        tokio::spawn(async move {
-            if let Err(e) = async {
-                log::info!("started the spawn ");
-                let mut client = PeerServiceClient::connect(peer_addr.clone()).await?;
-                log::info!("peer found and connected");
+        let handle = tokio::spawn(async move {
+            log::info!("started the spawn");
 
-                let mut requests = Vec::new();
+            let mut client = match PeerServiceClient::connect(peer_addr.clone()).await {
+                Ok(c) => c,
+                Err(e) => {
+                    log::error!("failed to connect to {}: {:?}", peer_addr, e);
+                    return;
+                }
+            };
+            log::info!("peer found and connected");
+
+            let mut requests = Vec::new();
+            requests.push(ReplicateChunksRequest {
+                node_id: node_addr.as_bytes().to_vec(),
+                file_hash: file_hash_vec.clone(),
+                payload: Some(replicate_chunks_request::Payload::Metadata(metadata)),
+            });
+            for chunk in chunks {
                 requests.push(ReplicateChunksRequest {
                     node_id: node_addr.as_bytes().to_vec(),
                     file_hash: file_hash_vec.clone(),
-                    payload: Some(replicate_chunks_request::Payload::Metadata(metadata)),
+                    payload: Some(replicate_chunks_request::Payload::ChunkData(chunk)),
                 });
-                for chunk in chunks {
-                    requests.push(ReplicateChunksRequest {
-                        node_id: node_addr.as_bytes().to_vec(),
-                        file_hash: file_hash_vec.clone(),
-                        payload: Some(replicate_chunks_request::Payload::ChunkData(chunk)),
-                    });
-                }
-
-                let stream = stream::iter(requests);
-                let resp = client.replicate_chunks(Request::new(stream)).await?;
-                log::info!(
-                    "replication response from {}: {:?}",
-                    peer_addr,
-                    resp.into_inner()
-                );
-                Ok::<_, Box<dyn std::error::Error>>(())
             }
-            .await
-            {
-                log::error!("replication task failed: {:?}", e);
+
+            let stream = stream::iter(requests);
+            match client.replicate_chunks(Request::new(stream)).await {
+                Ok(resp) => {
+                    log::info!(
+                        "replication response from {}: {:?}",
+                        peer_addr,
+                        resp.into_inner()
+                    );
+                }
+                Err(e) => {
+                    log::error!("replication to {} failed: {:?}", peer_addr, e);
+                }
             }
         });
+
+        handles.push(handle);
+    }
+
+    // wait for all replication tasks to finish
+    for handle in handles {
+        if let Err(e) = handle.await {
+            log::error!("replication task panicked: {:?}", e);
+        }
     }
 
     log::info!("finished");
 
     Ok(())
 }
-
 async fn download_file(
     node_addr: &str,
     hash_str: &str,

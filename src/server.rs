@@ -1,4 +1,5 @@
 use crate::dht::Peer;
+// use crate::dht::Peer;
 use crate::node::Node;
 use crate::storage_proto::replicate_chunks_request::Payload;
 use crate::storage_proto::{
@@ -9,8 +10,7 @@ use crate::storage_proto::{
     UploadChunkRequest, UploadChunkResponse,
 };
 use crate::storage_proto::{
-    FileInfo, ReplicateChunksRequest, ReplicateChunksResponse, ShowChunksRequest,
-    ShowChunksResponse,
+    ReplicateChunksRequest, ReplicateChunksResponse, ShowChunksRequest, ShowChunksResponse,
 };
 use crate::utils;
 use std::sync::Arc;
